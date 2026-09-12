@@ -26,4 +26,6 @@ pub enum Command {
     BuildKernel,
     /// Build uutils (musl, static) and busybox (musl, static)
     BuildUserland,
+    /// Assemble the root filesystem tree
+    AssembleRootfs,
 }

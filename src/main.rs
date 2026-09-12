@@ -16,5 +16,6 @@ fn main() -> Result<()> {
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
         Command::BuildKernel => stages::kernel::build_kernel(&cfg, cli.force),
         Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
+        Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
     }
 }

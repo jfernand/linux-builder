@@ -2,6 +2,7 @@ pub mod fetch;
 pub mod toolchain;
 pub mod kernel;
 pub mod userland;
+pub mod rootfs;
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
