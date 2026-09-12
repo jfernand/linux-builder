@@ -15,9 +15,9 @@ re-running if their output already exists, unless `--force` is passed.
    uutils/coreutils.
 2. `build-toolchain` — install `musl-tools` and the `x86_64-unknown-linux-musl`
    Rust target if missing.
-3. `build-kernel` — `make defconfig && make -jN` in the kernel source tree,
-   or `make olddefconfig` against `kernel.config_file` if one is set (see
-   "Customizing the kernel config" below).
+3. `build-kernel` — builds a minimal-base kernel config (or
+   `kernel.config_file`) and `make -jN` in the kernel source tree; see
+   "Customizing the kernel config" below.
 4. `build-userland` — build uutils/coreutils and BusyBox, both statically
    linked against musl.
 5. `assemble-rootfs` — lay out `build/rootfs` with the compiled binaries,
@@ -35,6 +35,36 @@ re-running if their output already exists, unless `--force` is passed.
 
 ## Customizing the kernel config
 
+By default (no `kernel.config_file` set), `build-kernel` starts from
+`defconfig` and then strips it down to a minimal base by turning off every
+"typical desktop" subsystem this project doesn't need (sound, Wi-Fi, legacy
+NIC/PATA/PCMCIA drivers, netfilter, NFS, quotas/ACLs/SELinux, IOMMU, debug
+instrumentation, 32-bit compat, and ISO9660) — everything needed to boot
+(PCI, ACPI, EFI, ATA/virtio block, ext4/vfat, console) is left untouched.
+Run `cargo run -- list-features` to see the full set, each named after what
+it re-enables:
+
+```
+graphics    DRM/KMS graphics + fbdev console (i915, virtio-gpu, bochs, AGP) instead of plain VGA text
+sound       ALSA sound subsystem and Intel HDA driver
+wireless    Wi-Fi stack (cfg80211/mac80211) and rfkill
+...
+```
+
+Turn any of them on with `kernel.features` in `linux-builder.toml`:
+
+```toml
+[kernel]
+features = ["graphics", "sound"]
+```
+
+`build-kernel` re-applies `kernel.features` on every run (including against
+a custom `config_file`, below), so toggling one only takes effect on the
+next `--force` build.
+
+For finer control than the named packs give you, hand-edit the config
+instead:
+
 ```bash
 cargo run -- fetch          # need the kernel source extracted first
 cargo run -- menu-config    # opens `make menuconfig`; saves to ./kernel.config on exit
@@ -47,11 +77,11 @@ Add the printed path to `linux-builder.toml`:
 config_file = "kernel.config"
 ```
 
-and `build-kernel` will apply it (via `olddefconfig`, so new kernel-version
-options get sane defaults) instead of the stock `defconfig`. Pass
-`--save-to <path>` to `menu-config` to save elsewhere, and re-run it any time
-to update the saved config — `build-kernel` picks up changes on its next
-`--force` run.
+and `build-kernel` will use it as-is (via `olddefconfig`, so new
+kernel-version options get sane defaults) instead of `defconfig` — and skips
+the minimal-base stripping above, since it's already exactly what you
+picked in `menu-config`. Pass `--save-to <path>` to `menu-config` to save
+elsewhere, and re-run it any time to update the saved config.
 
 ## Interactive dashboard (TUI)
 

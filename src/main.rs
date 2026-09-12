@@ -23,6 +23,7 @@ fn main() -> Result<()> {
         Command::MakeImage => stages::image::make_image(&cfg, cli.force),
         Command::TestQemu => stages::qemu::test_qemu(&cfg),
         Command::ListDevices => list_devices(),
+        Command::ListFeatures => list_features(),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
         Command::All => run_all(&cfg, cli.force),
         Command::Tui => tui::run(cli.config.clone()),
@@ -37,6 +38,13 @@ fn run_all(cfg: &Config, force: bool) -> Result<()> {
     stages::rootfs::assemble_rootfs(cfg, force)?;
     stages::image::make_image(cfg, force)?;
     println!("done. run `linux-builder test-qemu` to boot the image in QEMU.");
+    Ok(())
+}
+
+fn list_features() -> Result<()> {
+    for pack in stages::kernel::FEATURE_PACKS {
+        println!("{:<10} {}", pack.key, pack.description);
+    }
     Ok(())
 }
 

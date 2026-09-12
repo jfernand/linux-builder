@@ -26,6 +26,10 @@ pub struct KernelConfig {
     /// with instead of `defconfig`. Optional; unset builds the stock config.
     #[serde(default)]
     pub config_file: Option<PathBuf>,
+    /// Named feature packs to enable (see `stages::kernel::FEATURE_PACKS`),
+    /// e.g. `["graphics"]`. Applied on top of `config_file`/`defconfig`.
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
