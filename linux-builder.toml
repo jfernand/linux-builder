@@ -1,0 +1,18 @@
+build_dir = "build"
+
+[kernel]
+version = "6.17"
+url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.17.tar.xz"
+
+[busybox]
+version = "1.36.1"
+url = "https://busybox.net/downloads/busybox-1.36.1.tar.bz2"
+
+[uutils]
+git_url = "https://github.com/uutils/coreutils.git"
+git_rev = "main"
+
+[image]
+arch = "x86_64"
+size_mb = 512
+hostname = "linux-builder"
