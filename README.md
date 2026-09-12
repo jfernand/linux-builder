@@ -31,6 +31,22 @@ re-running if their output already exists, unless `--force` is passed.
    `--yes`) prompts you to retype the device path to confirm before
    overwriting it. `list-devices` shows which removable disks are attached.
 
+## Interactive dashboard (TUI)
+
+```bash
+cargo run -- tui
+```
+
+Runs every stage from an interactive dashboard instead of the command line:
+arrow keys (or `j`/`k`) select a stage, `Enter` runs it with live log output
+in the right-hand pane, and `q`/`Esc` quits. Selecting "Write to USB" opens a
+device picker (`r` to refresh) followed by a confirmation screen that
+requires retyping the device path before anything is written. Some stages
+need `sudo`; the TUI checks for cached/passwordless sudo on startup and, if
+needed, prompts once in the plain terminal before the dashboard takes over
+(spawned stages run with no stdin, so a password prompt from inside the
+dashboard would hang).
+
 Run everything with:
 
 ```bash
@@ -71,3 +87,5 @@ Once `build/output.img` boots successfully in QEMU, write it to a USB drive
 cargo run -- list-devices
 cargo run -- write-usb --device /dev/sdX
 ```
+
+or equivalently, from the TUI's "Write to USB" screen.

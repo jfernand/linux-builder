@@ -46,4 +46,6 @@ pub enum Command {
     },
     /// Run the full pipeline end to end
     All,
+    /// Interactive dashboard for running every stage and writing to a USB stick
+    Tui,
 }

@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod stages;
+mod tui;
 
 use anyhow::{bail, Result};
 use clap::Parser;
@@ -23,6 +24,7 @@ fn main() -> Result<()> {
         Command::ListDevices => list_devices(),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
         Command::All => run_all(&cfg, cli.force),
+        Command::Tui => tui::run(cli.config.clone()),
     }
 }
 
