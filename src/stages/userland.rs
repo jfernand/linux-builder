@@ -59,10 +59,23 @@ const BUSYBOX_APPLETS: &[&str] = &[
     "HALT",
 ];
 
-/// musl-gcc's own include dir doesn't ship the `linux/*.h` uapi headers that
-/// e.g. `init.c` needs (`linux/vt.h`); fall back to the system ones, which
-/// are libc-agnostic, without letting them shadow musl's own headers.
-const MUSL_CC: &str = "musl-gcc -idirafter /usr/include";
+/// Only built when `networking` is enabled in the config (toggleable from
+/// the TUI settings screen).
+const BUSYBOX_NETWORKING_APPLETS: &[&str] = &[
+    "UDHCPC",
+    "IFCONFIG",
+    "FEATURE_IFCONFIG_STATUS",
+    "ROUTE",
+    "PING",
+    "FEATURE_FANCY_PING",
+];
+
+/// musl-gcc's own include dir doesn't ship the `linux/*.h`/`asm/*.h` uapi
+/// headers that e.g. `init.c` (`linux/vt.h`) and the udhcpc networking
+/// applets (`asm/types.h`, multiarch-pathed on Debian/Ubuntu) need; fall
+/// back to the system ones, which are libc-agnostic, without letting them
+/// shadow musl's own headers.
+const MUSL_CC: &str = "musl-gcc -idirafter /usr/include -idirafter /usr/include/x86_64-linux-gnu";
 
 fn build_busybox(cfg: &Config, force: bool) -> Result<()> {
     let dir = cfg.busybox_build_dir();
@@ -76,9 +89,14 @@ fn build_busybox(cfg: &Config, force: bool) -> Result<()> {
     println!("configuring busybox (minimal, static, musl) in {}", dir.display());
     run_in(&dir, Command::new("make").arg("allnoconfig"))?;
 
+    let mut applets = BUSYBOX_APPLETS.to_vec();
+    if cfg.networking {
+        applets.extend_from_slice(BUSYBOX_NETWORKING_APPLETS);
+    }
+
     let config_path = dir.join(".config");
     let mut config = std::fs::read_to_string(&config_path)?;
-    for applet in BUSYBOX_APPLETS {
+    for applet in applets {
         let not_set = format!("# CONFIG_{applet} is not set");
         let enabled = format!("CONFIG_{applet}=y");
         if config.contains(&not_set) {

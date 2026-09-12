@@ -12,7 +12,7 @@ use std::process::Command;
 const COREUTILS_APPLETS: &[&str] = &[
     "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "echo", "pwd", "touch", "chmod", "chown",
     "ln", "grep", "sed", "head", "tail", "sort", "uniq", "wc", "find", "env", "true", "false",
-    "test", "df", "du", "date", "uname", "sleep", "kill", "ps",
+    "test", "[", "df", "du", "date", "uname", "sleep", "kill", "ps",
 ];
 
 pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
@@ -32,6 +32,9 @@ pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
     install_busybox(cfg, &root)?;
     install_kernel_modules(cfg, &root)?;
     write_config_files(cfg, &root)?;
+    if cfg.networking {
+        write_udhcpc_script(&root)?;
+    }
 
     Ok(())
 }
@@ -65,6 +68,10 @@ const BUSYBOX_SBIN_APPLETS: &[&str] = &["hostname", "reboot", "poweroff", "halt"
 /// `feat_os_unix_musl` feature set, so route these through busybox instead.
 const BUSYBOX_BIN_APPLETS: &[&str] = &["mount", "umount"];
 
+/// Only symlinked when `networking` is enabled (see BUSYBOX_NETWORKING_APPLETS
+/// in build_busybox, which is what actually compiles these applets in).
+const BUSYBOX_NETWORKING_BIN_APPLETS: &[&str] = &["udhcpc", "ifconfig", "route", "ping"];
+
 fn install_busybox(cfg: &Config, root: &Path) -> Result<()> {
     let src = cfg.busybox_build_dir().join("busybox");
     let dest = root.join("bin/busybox");
@@ -75,7 +82,11 @@ fn install_busybox(cfg: &Config, root: &Path) -> Result<()> {
     let _ = fs::remove_file(&sh_link);
     symlink("busybox", &sh_link).context("symlinking bin/sh -> busybox")?;
 
-    for applet in BUSYBOX_BIN_APPLETS {
+    let mut bin_applets = BUSYBOX_BIN_APPLETS.to_vec();
+    if cfg.networking {
+        bin_applets.extend_from_slice(BUSYBOX_NETWORKING_BIN_APPLETS);
+    }
+    for applet in bin_applets {
         let link = root.join("bin").join(applet);
         let _ = fs::remove_file(&link);
         symlink("busybox", &link).with_context(|| format!("symlinking bin/{applet} -> busybox"))?;
@@ -127,18 +138,68 @@ fn write_config_files(cfg: &Config, root: &Path) -> Result<()> {
          ::shutdown:/sbin/swapoff -a\n",
     )?;
 
+    let networking_lines = if cfg.networking {
+        "ifconfig lo 127.0.0.1 up\n\
+         udhcpc -i eth0 -s /usr/share/udhcpc/default.script -b\n"
+    } else {
+        ""
+    };
+
     let rcs_path = root.join("etc/init.d/rcS");
     fs::write(
         &rcs_path,
-        "#!/bin/sh\n\
-         mount -t proc proc /proc\n\
-         mount -t sysfs sysfs /sys\n\
-         mount -t devtmpfs devtmpfs /dev 2>/dev/null\n\
-         hostname -F /etc/hostname\n",
+        format!(
+            "#!/bin/sh\n\
+             mount -t proc proc /proc\n\
+             mount -t sysfs sysfs /sys\n\
+             mount -t devtmpfs devtmpfs /dev 2>/dev/null\n\
+             hostname -F /etc/hostname\n\
+             {networking_lines}"
+        ),
     )?;
-    let mut perms = fs::metadata(&rcs_path)?.permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-    fs::set_permissions(&rcs_path, perms)?;
+    make_executable(&rcs_path)?;
 
+    Ok(())
+}
+
+/// Busybox's standard udhcpc bound/renew/deconfig handler: applies the
+/// leased address via `ifconfig`, replaces the default route, and writes
+/// /etc/resolv.conf. udhcpc runs this itself on lease events; it doesn't
+/// configure anything on its own.
+fn write_udhcpc_script(root: &Path) -> Result<()> {
+    let dir = root.join("usr/share/udhcpc");
+    fs::create_dir_all(&dir)?;
+
+    let script_path = dir.join("default.script");
+    fs::write(
+        &script_path,
+        "#!/bin/sh\n\
+         RESOLV_CONF=\"/etc/resolv.conf\"\n\
+         case \"$1\" in\n\
+         \tdeconfig)\n\
+         \t\tifconfig \"$interface\" 0.0.0.0\n\
+         \t\t;;\n\
+         \trenew|bound)\n\
+         \t\tifconfig \"$interface\" \"$ip\" ${subnet:+netmask \"$subnet\"} ${broadcast:+broadcast \"$broadcast\"}\n\
+         \t\tif [ -n \"$router\" ]; then\n\
+         \t\t\twhile route del default gw 0.0.0.0 dev \"$interface\" 2>/dev/null; do :; done\n\
+         \t\t\tfor i in $router; do route add default gw \"$i\" dev \"$interface\"; done\n\
+         \t\tfi\n\
+         \t\t> \"$RESOLV_CONF\"\n\
+         \t\t[ -n \"$domain\" ] && echo \"search $domain\" >> \"$RESOLV_CONF\"\n\
+         \t\tfor i in $dns; do echo \"nameserver $i\" >> \"$RESOLV_CONF\"; done\n\
+         \t\t;;\n\
+         esac\n\
+         exit 0\n",
+    )?;
+    make_executable(&script_path)?;
+
+    Ok(())
+}
+
+fn make_executable(path: &Path) -> Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    fs::set_permissions(path, perms)?;
     Ok(())
 }

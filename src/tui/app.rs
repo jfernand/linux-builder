@@ -1,5 +1,7 @@
 use super::stage::STAGES;
+use crate::config::Config;
 use crate::stages::usb::Device;
+use anyhow::Result;
 use std::collections::VecDeque;
 use std::io::Read;
 use std::path::PathBuf;
@@ -34,7 +36,11 @@ pub enum Screen {
     Dashboard,
     DevicePicker { devices: Vec<Device>, selected: usize, error: Option<String> },
     ConfirmWrite { device: Device, typed: String },
+    Settings { selected: usize },
 }
+
+/// Settings toggles shown on the Screen::Settings overlay.
+pub const SETTINGS_COUNT: usize = 2;
 
 pub enum AppEvent {
     Log(usize, String),
@@ -43,6 +49,11 @@ pub enum AppEvent {
 
 pub struct App {
     pub config_path: PathBuf,
+    pub cfg: Config,
+    /// Pass --force to the next stage run. Session-only, not persisted:
+    /// a one-shot "rebuild even if already built" switch, distinct from
+    /// `cfg.networking` and friends which are persisted build settings.
+    pub force: bool,
     pub stages: Vec<StageState>,
     pub selected: usize,
     pub screen: Screen,
@@ -53,10 +64,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config_path: PathBuf) -> Self {
+    pub fn new(config_path: PathBuf) -> Result<Self> {
+        let cfg = Config::load(&config_path)?;
         let (tx, rx) = mpsc::channel();
-        App {
+        Ok(App {
             config_path,
+            cfg,
+            force: false,
             stages: STAGES.iter().map(|_| StageState::default()).collect(),
             selected: 0,
             screen: Screen::Dashboard,
@@ -64,7 +78,12 @@ impl App {
             should_quit: false,
             tx,
             rx,
-        }
+        })
+    }
+
+    pub fn toggle_networking(&mut self) -> Result<()> {
+        self.cfg.networking = !self.cfg.networking;
+        self.cfg.save(&self.config_path)
     }
 
     /// Drains any pending events from running child processes. Returns true
@@ -117,6 +136,9 @@ impl App {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("linux-builder"));
         let mut args = vec!["--config".to_string(), self.config_path.to_string_lossy().to_string()];
         args.extend(kind.subcommand_args(device));
+        if self.force {
+            args.push("--force".to_string());
+        }
 
         let mut command = if let Some(secs) = kind.timeout_secs() {
             let mut c = Command::new("timeout");

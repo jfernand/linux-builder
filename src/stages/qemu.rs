@@ -32,6 +32,13 @@ pub fn test_qemu(cfg: &Config) -> Result<()> {
         "-nographic",
     ]);
 
+    if cfg.networking {
+        // Unprivileged user-mode NAT with a built-in DHCP server, so
+        // udhcpc in the guest has something to talk to with no host-side
+        // root or network config needed.
+        cmd.args(["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]);
+    }
+
     if let Some(ovmf_code) = OVMF_CODE_CANDIDATES
         .iter()
         .find(|p| std::path::Path::new(p).exists())

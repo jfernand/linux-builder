@@ -3,7 +3,7 @@ mod stage;
 
 use crate::stages::usb::Device;
 use anyhow::Result;
-use app::{App, Screen, Status};
+use app::{App, Screen, Status, SETTINGS_COUNT};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, ExecutableCommand};
@@ -36,8 +36,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(config_path);
-    let result = event_loop(&mut terminal, &mut app);
+    let result = App::new(config_path).and_then(|mut app| event_loop(&mut terminal, &mut app));
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -78,6 +77,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     app.selected += 1;
                 }
             }
+            KeyCode::Char('s') => app.screen = Screen::Settings { selected: 0 },
             KeyCode::Enter => {
                 if app.running.is_some() {
                     return;
@@ -88,6 +88,32 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     app.run_stage(app.selected, None);
                 }
             }
+            _ => {}
+        },
+        Screen::Settings { selected } => match code {
+            KeyCode::Esc | KeyCode::Char('s') => app.screen = Screen::Dashboard,
+            KeyCode::Up | KeyCode::Char('k') => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *selected + 1 < SETTINGS_COUNT {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => match *selected {
+                0 => {
+                    // Best-effort: if the config file can't be written (e.g.
+                    // permissions), just leave the in-memory toggle reverted
+                    // rather than surfacing a save error into a stage's log.
+                    if app.toggle_networking().is_err() {
+                        app.cfg.networking = !app.cfg.networking;
+                    }
+                }
+                1 => app.force = !app.force,
+                _ => {}
+            },
             _ => {}
         },
         Screen::DevicePicker { devices, selected, .. } => match code {
@@ -151,6 +177,7 @@ fn draw(f: &mut Frame, app: &App) {
             draw_device_picker(f, size, devices, *selected, error.as_deref())
         }
         Screen::ConfirmWrite { device, typed } => draw_confirm(f, size, device, typed),
+        Screen::Settings { selected } => draw_settings(f, size, app, *selected),
         Screen::Dashboard => {}
     }
 }
@@ -192,9 +219,12 @@ fn draw_log_pane(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let text = if app.running.is_some() {
-        "running... (q to quit once idle)"
+        "running... (q to quit once idle)".to_string()
     } else {
-        "up/down: select  enter: run  q/esc: quit"
+        format!(
+            "up/down: select  enter: run  s: settings  q/esc: quit{}",
+            if app.force { "  [force: ON]" } else { "" }
+        )
     };
     f.render_widget(Paragraph::new(text), area);
 }
@@ -247,6 +277,44 @@ fn draw_device_picker(f: &mut Frame, area: Rect, devices: &[Device], selected: u
         Block::default()
             .borders(Borders::ALL)
             .title("Select a USB device (enter: pick, r: refresh, esc: cancel)"),
+    );
+    f.render_widget(ratatui::widgets::Clear, popup);
+    f.render_widget(list, popup);
+}
+
+fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
+    let popup = centered_rect(60, 30, area);
+    let rows: [(&str, bool, &str); 2] = [
+        (
+            "Networking",
+            app.cfg.networking,
+            "busybox udhcpc/ifconfig/route/ping, DHCP at boot, QEMU NIC",
+        ),
+        (
+            "Force rebuild (this session)",
+            app.force,
+            "pass --force to the next stage you run",
+        ),
+    ];
+
+    let items: Vec<ListItem> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (label, on, desc))| {
+            let mark = if *on { "[x]" } else { "[ ]" };
+            let style = if i == selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(Span::styled(format!("{mark} {label} — {desc}"), style)))
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Settings (enter/space: toggle, esc: close)"),
     );
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(list, popup);

@@ -47,6 +47,18 @@ needed, prompts once in the plain terminal before the dashboard takes over
 (spawned stages run with no stdin, so a password prompt from inside the
 dashboard would hang).
 
+`s` opens a settings screen with two toggles:
+
+- **Networking** — persisted to `linux-builder.toml`. When on, `build-userland`
+  compiles BusyBox's `udhcpc`/`ifconfig`/`route`/`ping` applets,
+  `assemble-rootfs` installs a udhcpc lease script and brings up DHCP on
+  `eth0` at boot, and `test-qemu` adds a NIC (QEMU user-mode NAT, with a
+  built-in DHCP server — no host root needed). Off by default.
+- **Force rebuild** — session-only (not persisted), equivalent to the CLI's
+  `--force`. Toggling a build setting like networking only takes effect on
+  the next `build-userland`/`assemble-rootfs`/`make-image` run of a stage
+  that's already built once, so turn this on before re-running them.
+
 Run everything with:
 
 ```bash
