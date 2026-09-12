@@ -14,6 +14,7 @@ pub fn build_kernel(cfg: &Config, force: bool) -> Result<()> {
     }
 
     configure_kernel(cfg, &dir)?;
+    apply_custom_logo(cfg, &dir)?;
 
     let jobs = num_cpus();
     println!("building kernel ({jobs} jobs)");
@@ -275,7 +276,42 @@ pub const FEATURE_PACKS: &[FeaturePack] = &[
         description: "ISO9660/Joliet/zisofs filesystem support, for booting or mounting optical media images",
         options: &["CONFIG_ISO9660_FS", "CONFIG_JOLIET", "CONFIG_ZISOFS"],
     },
+    FeaturePack {
+        key: "boot-logo",
+        label: "Boot logo",
+        description: "Framebuffer console + boot-time Linux logo (penguin, or a custom image via kernel.logo_file)",
+        options: &[
+            "CONFIG_FB",
+            "CONFIG_FB_EFI",
+            "CONFIG_SYSFB_SIMPLEFB",
+            "CONFIG_FRAMEBUFFER_CONSOLE",
+            "CONFIG_LOGO",
+            "CONFIG_LOGO_LINUX_CLUT224",
+            "CONFIG_FB_LOGO_EXTRA",
+        ],
+    },
 ];
+
+/// Path to the stock 80x80, 224-color boot logo within the kernel source
+/// tree, so it can be swapped for `kernel.logo_file`.
+const LOGO_PATH: &str = "drivers/video/logo/logo_linux_clut224.ppm";
+
+/// Replaces the stock boot logo with `kernel.logo_file`, if both it and the
+/// `boot-logo` feature are set. The kernel's own logo converter (run during
+/// the build) rejects anything that isn't an 80x80 ASCII (P3) PPM with at
+/// most 224 distinct colors, so we don't re-validate the format here.
+fn apply_custom_logo(cfg: &Config, dir: &Path) -> Result<()> {
+    let Some(logo_file) = &cfg.kernel.logo_file else {
+        return Ok(());
+    };
+    if !cfg.kernel.features.iter().any(|f| f == "boot-logo") {
+        return Ok(());
+    }
+    println!("using custom boot logo from {}", logo_file.display());
+    std::fs::copy(logo_file, dir.join(LOGO_PATH))
+        .with_context(|| format!("copying {} into {}", logo_file.display(), dir.display()))?;
+    Ok(())
+}
 
 fn feature_pack(key: &str) -> Option<&'static FeaturePack> {
     FEATURE_PACKS.iter().find(|p| p.key == key)

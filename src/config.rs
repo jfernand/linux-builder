@@ -30,6 +30,12 @@ pub struct KernelConfig {
     /// e.g. `["graphics"]`. Applied on top of `config_file`/`defconfig`.
     #[serde(default)]
     pub features: Vec<String>,
+    /// Custom boot-logo image: an 80x80, ASCII (P3) PPM with at most 224
+    /// distinct colors, replacing the stock penguin. Only takes effect
+    /// with the `boot-logo` feature enabled; the kernel's own logo
+    /// converter rejects anything that doesn't fit those constraints.
+    #[serde(default)]
+    pub logo_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

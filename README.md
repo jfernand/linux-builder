@@ -83,6 +83,16 @@ the minimal-base stripping above, since it's already exactly what you
 picked in `menu-config`. Pass `--save-to <path>` to `menu-config` to save
 elsewhere, and re-run it any time to update the saved config.
 
+The `boot-logo` pack also takes a `kernel.logo_file`: an 80x80, ASCII (P3)
+PPM with at most 224 distinct colors, replacing the stock penguin shown at
+boot.
+
+```toml
+[kernel]
+features = ["boot-logo"]
+logo_file = "my-logo.ppm"
+```
+
 ## Interactive dashboard (TUI)
 
 ```bash
