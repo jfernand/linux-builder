@@ -3,7 +3,11 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use std::process::Command;
 
-pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
+pub fn fetch(cfg: &Config, force: bool, clean: bool) -> Result<()> {
+    if clean {
+        clean_sources(cfg)?;
+    }
+
     std::fs::create_dir_all(cfg.sources_dir()).context("creating sources dir")?;
 
     fetch_tarball(
@@ -24,6 +28,24 @@ pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
 
     fetch_uutils(cfg, force)?;
 
+    Ok(())
+}
+
+/// Remove downloaded archives and extracted source trees so the next fetch
+/// starts from scratch.
+fn clean_sources(cfg: &Config) -> Result<()> {
+    for dir in [
+        cfg.sources_dir(),
+        cfg.kernel_build_dir(),
+        cfg.busybox_build_dir(),
+        cfg.uutils_build_dir(),
+    ] {
+        if dir.exists() {
+            println!("removing {}", dir.display());
+            std::fs::remove_dir_all(&dir)
+                .with_context(|| format!("removing {}", dir.display()))?;
+        }
+    }
     Ok(())
 }
 

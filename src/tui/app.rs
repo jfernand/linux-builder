@@ -36,6 +36,7 @@ pub enum Screen {
     Dashboard,
     DevicePicker { devices: Vec<Device>, selected: usize, error: Option<String> },
     ConfirmWrite { device: Device, typed: String },
+    ConfirmClean { idx: usize },
     Settings { selected: usize },
 }
 
@@ -120,6 +121,26 @@ impl App {
                     selected: 0,
                     error: Some(e.to_string()),
                 };
+            }
+        }
+    }
+
+    /// Removes the given stage's on-disk outputs so it (and anything
+    /// downstream) redoes its work next run.
+    pub fn clean_stage(&mut self, idx: usize) {
+        if self.running.is_some() {
+            return;
+        }
+        let kind = STAGES[idx];
+        self.stages[idx].log.clear();
+        match kind.clean(&self.cfg) {
+            Ok(()) => {
+                self.stages[idx].log.push_back("cleaned".to_string());
+                self.stages[idx].status = Status::Idle;
+            }
+            Err(e) => {
+                self.stages[idx].log.push_back(format!("clean failed: {e}"));
+                self.stages[idx].status = Status::Failed;
             }
         }
     }

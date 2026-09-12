@@ -19,7 +19,11 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     /// Download and extract kernel, busybox, and uutils sources
-    Fetch,
+    Fetch {
+        /// Remove previously downloaded archives and extracted sources before fetching
+        #[arg(long)]
+        clean: bool,
+    },
     /// Ensure the musl toolchain and cargo musl target are available
     BuildToolchain,
     /// Configure and build the kernel

@@ -78,6 +78,14 @@ fn handle_key(app: &mut App, code: KeyCode) {
                 }
             }
             KeyCode::Char('s') => app.screen = Screen::Settings { selected: 0 },
+            KeyCode::Char('c') => {
+                if app.running.is_none() {
+                    let kind = STAGES[app.selected];
+                    if kind.can_clean() && kind.is_present(&app.cfg) {
+                        app.screen = Screen::ConfirmClean { idx: app.selected };
+                    }
+                }
+            }
             KeyCode::Enter => {
                 if app.running.is_some() {
                     return;
@@ -114,6 +122,15 @@ fn handle_key(app: &mut App, code: KeyCode) {
                 1 => app.force = !app.force,
                 _ => {}
             },
+            _ => {}
+        },
+        Screen::ConfirmClean { idx } => match code {
+            KeyCode::Esc | KeyCode::Char('n') => app.screen = Screen::Dashboard,
+            KeyCode::Enter | KeyCode::Char('y') => {
+                let idx = *idx;
+                app.screen = Screen::Dashboard;
+                app.clean_stage(idx);
+            }
             _ => {}
         },
         Screen::DevicePicker { devices, selected, .. } => match code {
@@ -177,6 +194,7 @@ fn draw(f: &mut Frame, app: &App) {
             draw_device_picker(f, size, devices, *selected, error.as_deref())
         }
         Screen::ConfirmWrite { device, typed } => draw_confirm(f, size, device, typed),
+        Screen::ConfirmClean { idx } => draw_confirm_clean(f, size, STAGES[*idx].label()),
         Screen::Settings { selected } => draw_settings(f, size, app, *selected),
         Screen::Dashboard => {}
     }
@@ -194,15 +212,23 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
                 Status::Success => ("OK ", Color::Green),
                 Status::Failed => ("!! ", Color::Red),
             };
+            let present = if !stage.can_clean() {
+                "  "
+            } else if stage.is_present(&app.cfg) {
+                "* "
+            } else {
+                "  "
+            };
             let mut style = Style::default().fg(color);
             if i == app.selected {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            ListItem::new(Line::from(Span::styled(format!("{icon}{}", stage.label()), style)))
+            ListItem::new(Line::from(Span::styled(format!("{icon}{present}{}", stage.label()), style)))
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Pipeline stages"));
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title("Pipeline stages (* = output present)"));
     f.render_widget(list, area);
 }
 
@@ -222,7 +248,7 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
         "running... (q to quit once idle)".to_string()
     } else {
         format!(
-            "up/down: select  enter: run  s: settings  q/esc: quit{}",
+            "up/down: select  enter: run  c: clean  s: settings  q/esc: quit{}",
             if app.force { "  [force: ON]" } else { "" }
         )
     };
@@ -335,6 +361,19 @@ fn draw_confirm(f: &mut Frame, area: Rect, device: &Device, typed: &str) {
         Line::from("enter: confirm  esc: cancel"),
     ];
     let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Confirm write"));
+    f.render_widget(ratatui::widgets::Clear, popup);
+    f.render_widget(paragraph, popup);
+}
+
+fn draw_confirm_clean(f: &mut Frame, area: Rect, label: &str) {
+    let popup = centered_rect(60, 20, area);
+    let text = vec![
+        Line::from(format!("Clean output for \"{label}\"?")),
+        Line::from("This forces it (and anything downstream) to redo its work."),
+        Line::from(""),
+        Line::from("y/enter: confirm  n/esc: cancel"),
+    ];
+    let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Confirm clean"));
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(paragraph, popup);
 }

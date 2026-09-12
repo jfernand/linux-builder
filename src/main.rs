@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     let cfg = Config::load(&cli.config)?;
 
     match cli.command {
-        Command::Fetch => stages::fetch::fetch(&cfg, cli.force),
+        Command::Fetch { clean } => stages::fetch::fetch(&cfg, cli.force, clean),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
         Command::BuildKernel => stages::kernel::build_kernel(&cfg, cli.force),
         Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
 }
 
 fn run_all(cfg: &Config, force: bool) -> Result<()> {
-    stages::fetch::fetch(cfg, force)?;
+    stages::fetch::fetch(cfg, force, false)?;
     stages::toolchain::build_toolchain()?;
     stages::kernel::build_kernel(cfg, force)?;
     stages::userland::build_userland(cfg, force)?;
