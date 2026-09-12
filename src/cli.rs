@@ -24,4 +24,6 @@ pub enum Command {
     BuildToolchain,
     /// Configure and build the kernel
     BuildKernel,
+    /// Build uutils (musl, static) and busybox (musl, static)
+    BuildUserland,
 }
