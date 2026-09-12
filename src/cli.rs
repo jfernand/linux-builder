@@ -28,6 +28,13 @@ pub enum Command {
     BuildToolchain,
     /// Configure and build the kernel
     BuildKernel,
+    /// Interactively customize the kernel config with `make menuconfig` and
+    /// save the result for reuse via `kernel.config_file`
+    MenuConfig {
+        /// Where to save the resulting kernel config
+        #[arg(long, default_value = "kernel.config")]
+        save_to: PathBuf,
+    },
     /// Build uutils (musl, static) and busybox (musl, static)
     BuildUserland,
     /// Assemble the root filesystem tree

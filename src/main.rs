@@ -17,6 +17,7 @@ fn main() -> Result<()> {
         Command::Fetch { clean } => stages::fetch::fetch(&cfg, cli.force, clean),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
         Command::BuildKernel => stages::kernel::build_kernel(&cfg, cli.force),
+        Command::MenuConfig { save_to } => stages::kernel::menuconfig(&cfg, &save_to),
         Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
         Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
         Command::MakeImage => stages::image::make_image(&cfg, cli.force),

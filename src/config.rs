@@ -22,6 +22,10 @@ pub struct Config {
 pub struct KernelConfig {
     pub version: String,
     pub url: String,
+    /// Path to a saved `.config` (e.g. produced by `menuconfig`) to build
+    /// with instead of `defconfig`. Optional; unset builds the stock config.
+    #[serde(default)]
+    pub config_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

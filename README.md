@@ -15,7 +15,9 @@ re-running if their output already exists, unless `--force` is passed.
    uutils/coreutils.
 2. `build-toolchain` — install `musl-tools` and the `x86_64-unknown-linux-musl`
    Rust target if missing.
-3. `build-kernel` — `make defconfig && make -jN` in the kernel source tree.
+3. `build-kernel` — `make defconfig && make -jN` in the kernel source tree,
+   or `make olddefconfig` against `kernel.config_file` if one is set (see
+   "Customizing the kernel config" below).
 4. `build-userland` — build uutils/coreutils and BusyBox, both statically
    linked against musl.
 5. `assemble-rootfs` — lay out `build/rootfs` with the compiled binaries,
@@ -30,6 +32,26 @@ re-running if their output already exists, unless `--force` is passed.
    device with `dd`. Refuses to run unless `/dev/sdX` exists, and (without
    `--yes`) prompts you to retype the device path to confirm before
    overwriting it. `list-devices` shows which removable disks are attached.
+
+## Customizing the kernel config
+
+```bash
+cargo run -- fetch          # need the kernel source extracted first
+cargo run -- menu-config    # opens `make menuconfig`; saves to ./kernel.config on exit
+```
+
+Add the printed path to `linux-builder.toml`:
+
+```toml
+[kernel]
+config_file = "kernel.config"
+```
+
+and `build-kernel` will apply it (via `olddefconfig`, so new kernel-version
+options get sane defaults) instead of the stock `defconfig`. Pass
+`--save-to <path>` to `menu-config` to save elsewhere, and re-run it any time
+to update the saved config — `build-kernel` picks up changes on its next
+`--force` run.
 
 ## Interactive dashboard (TUI)
 
