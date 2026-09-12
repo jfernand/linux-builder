@@ -1,5 +1,6 @@
 pub mod fetch;
 pub mod toolchain;
+pub mod kernel;
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;

@@ -22,4 +22,6 @@ pub enum Command {
     Fetch,
     /// Ensure the musl toolchain and cargo musl target are available
     BuildToolchain,
+    /// Configure and build the kernel
+    BuildKernel,
 }
