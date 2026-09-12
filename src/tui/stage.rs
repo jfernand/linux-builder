@@ -36,7 +36,7 @@ impl StageKind {
             StageKind::AssembleRootfs => "Assemble rootfs",
             StageKind::MakeImage => "Make image",
             StageKind::WriteUsb => "Write to USB",
-            StageKind::TestQemu => "Test in QEMU (30s)",
+            StageKind::TestQemu => "Test in QEMU (opens a window)",
         }
     }
 
@@ -60,17 +60,10 @@ impl StageKind {
                 device.unwrap_or_default().into(),
                 "--yes".into(),
             ],
-            // Bounded so a stray un-interactive boot can't hang the
-            // dashboard forever; run `linux-builder test-qemu` directly
-            // for an interactive session.
-            StageKind::TestQemu => vec!["test-qemu".into()],
-        }
-    }
-
-    pub fn timeout_secs(&self) -> Option<u64> {
-        match self {
-            StageKind::TestQemu => Some(30),
-            _ => None,
+            // `--window`: the dashboard has no stdin to hand an
+            // interactive serial console, so open QEMU's own graphical
+            // window instead.
+            StageKind::TestQemu => vec!["test-qemu".into(), "--window".into()],
         }
     }
 

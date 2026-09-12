@@ -183,17 +183,8 @@ impl App {
             args.push("--force".to_string());
         }
 
-        let mut command = if let Some(secs) = kind.timeout_secs() {
-            let mut c = Command::new("timeout");
-            c.arg(secs.to_string()).arg(&exe).args(&args);
-            c
-        } else {
-            let mut c = Command::new(&exe);
-            c.args(&args);
-            c
-        };
-
-        let child = command
+        let child = Command::new(&exe)
+            .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

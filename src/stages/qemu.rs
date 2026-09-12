@@ -17,7 +17,7 @@ const OVMF_VARS_CANDIDATES: &[&str] = &[
     "/usr/share/edk2/ovmf/OVMF_VARS.fd",
 ];
 
-pub fn test_qemu(cfg: &Config) -> Result<()> {
+pub fn test_qemu(cfg: &Config, window: bool) -> Result<()> {
     let image = cfg.output_image();
     if !image.exists() {
         bail!("{} does not exist; run make-image first", image.display());
@@ -29,8 +29,15 @@ pub fn test_qemu(cfg: &Config) -> Result<()> {
         "1024",
         "-drive",
         &format!("file={},format=raw,if=virtio", image.display()),
-        "-nographic",
     ]);
+
+    if window {
+        // Let QEMU open its own graphical window (its default display
+        // backend) with its own keyboard focus, instead of attaching the
+        // guest's serial console to our stdio.
+    } else {
+        cmd.arg("-nographic");
+    }
 
     if cfg.networking {
         // Unprivileged user-mode NAT with a built-in DHCP server, so
@@ -63,6 +70,10 @@ pub fn test_qemu(cfg: &Config) -> Result<()> {
         println!("warning: no OVMF firmware found, falling back to BIOS boot (may not work with a GPT/EFI image)");
     }
 
-    println!("booting {} in QEMU (Ctrl-A X to quit)", image.display());
+    if window {
+        println!("booting {} in QEMU (close the window to quit)", image.display());
+    } else {
+        println!("booting {} in QEMU (Ctrl-A X to quit)", image.display());
+    }
     run(&mut cmd)
 }

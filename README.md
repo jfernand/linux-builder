@@ -27,7 +27,9 @@ re-running if their output already exists, unless `--force` is passed.
    the rootfs and kernel in, and install GRUB. Requires `sudo` for loop
    devices, `mkfs`, `mount`, and `grub-install`.
 7. `test-qemu` — boot `build/output.img` in `qemu-system-x86_64` with OVMF
-   UEFI firmware.
+   UEFI firmware. Attaches the guest's serial console to this terminal by
+   default; pass `--window` to get a normal QEMU graphical window instead
+   (used by the TUI, which has no stdin to hand an interactive console).
 8. `write-usb --device /dev/sdX` — write `build/output.img` to a removable
    device with `dd`. Refuses to run unless `/dev/sdX` exists, and (without
    `--yes`) prompts you to retype the device path to confirm before
@@ -58,9 +60,10 @@ Turn any of them on with `kernel.features` in `linux-builder.toml`:
 features = ["graphics", "sound"]
 ```
 
-`build-kernel` re-applies `kernel.features` on every run (including against
-a custom `config_file`, below), so toggling one only takes effect on the
-next `--force` build.
+or from the TUI settings screen (`s`), which lists them as checkboxes
+alongside Networking. `build-kernel` re-applies `kernel.features` on every
+run (including against a custom `config_file`, below), so toggling one only
+takes effect on the next `--force` build.
 
 For finer control than the named packs give you, hand-edit the config
 instead:
@@ -101,7 +104,10 @@ cargo run -- tui
 
 Runs every stage from an interactive dashboard instead of the command line:
 arrow keys (or `j`/`k`) select a stage, `Enter` runs it with live log output
-in the right-hand pane, and `q`/`Esc` quits. Selecting "Write to USB" opens a
+in the right-hand pane, and `q`/`Esc` quits. "Test in QEMU" instead opens
+QEMU's own graphical window (the dashboard has no stdin to hand it an
+interactive serial console); the dashboard stays on that stage until you
+close the window. Selecting "Write to USB" opens a
 device picker (`r` to refresh) followed by a confirmation screen that
 requires retyping the device path before anything is written. Some stages
 need `sudo`; the TUI checks for cached/passwordless sudo on startup and, if

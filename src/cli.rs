@@ -42,7 +42,13 @@ pub enum Command {
     /// Partition and populate the bootable disk image
     MakeImage,
     /// Boot the produced image in QEMU
-    TestQemu,
+    TestQemu {
+        /// Open QEMU's own graphical window instead of attaching the serial
+        /// console to this terminal (used by the TUI, which otherwise can't
+        /// pipe keyboard input to an interactive boot)
+        #[arg(long)]
+        window: bool,
+    },
     /// List removable disks that look like USB sticks
     ListDevices,
     /// List named kernel feature packs that can be enabled via

@@ -21,7 +21,7 @@ fn main() -> Result<()> {
         Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
         Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
         Command::MakeImage => stages::image::make_image(&cfg, cli.force),
-        Command::TestQemu => stages::qemu::test_qemu(&cfg),
+        Command::TestQemu { window } => stages::qemu::test_qemu(&cfg, window),
         Command::ListDevices => list_devices(),
         Command::ListFeatures => list_features(),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
