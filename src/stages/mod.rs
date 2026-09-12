@@ -5,6 +5,7 @@ pub mod userland;
 pub mod rootfs;
 pub mod image;
 pub mod qemu;
+pub mod usb;
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;

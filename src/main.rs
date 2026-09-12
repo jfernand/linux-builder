@@ -2,10 +2,11 @@ mod cli;
 mod config;
 mod stages;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::Parser;
 use cli::{Cli, Command};
 use config::Config;
+use std::io::Write;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -19,6 +20,8 @@ fn main() -> Result<()> {
         Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
         Command::MakeImage => stages::image::make_image(&cfg, cli.force),
         Command::TestQemu => stages::qemu::test_qemu(&cfg),
+        Command::ListDevices => list_devices(),
+        Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
         Command::All => run_all(&cfg, cli.force),
     }
 }
@@ -32,4 +35,52 @@ fn run_all(cfg: &Config, force: bool) -> Result<()> {
     stages::image::make_image(cfg, force)?;
     println!("done. run `linux-builder test-qemu` to boot the image in QEMU.");
     Ok(())
+}
+
+fn list_devices() -> Result<()> {
+    let devices = stages::usb::list_removable_devices()?;
+    if devices.is_empty() {
+        println!("no removable disks found");
+        return Ok(());
+    }
+    for d in devices {
+        println!(
+            "{}\t{}\t{}\t{}",
+            d.path(),
+            d.size,
+            d.tran,
+            if d.model.is_empty() { "-" } else { &d.model }
+        );
+    }
+    Ok(())
+}
+
+fn write_usb(cfg: &Config, device: &str, yes: bool) -> Result<()> {
+    if !yes {
+        let devices = stages::usb::list_removable_devices()?;
+        let matched = devices.iter().find(|d| d.path() == device);
+        match matched {
+            Some(d) => println!(
+                "About to overwrite {} ({}, {}, {}) with {}",
+                d.path(),
+                d.size,
+                d.tran,
+                if d.model.is_empty() { "-" } else { &d.model },
+                cfg.output_image().display()
+            ),
+            None => println!(
+                "warning: {device} was not found in the removable-disk list — \
+                 double check this is really a USB stick, not your main disk"
+            ),
+        }
+        print!("This will PERMANENTLY ERASE {device}. Type the device path again to confirm: ");
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if input.trim() != device {
+            bail!("confirmation did not match {device}, aborting");
+        }
+    }
+
+    stages::usb::write_usb(cfg, device, true, |line| println!("{line}"))
 }

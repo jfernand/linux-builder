@@ -26,6 +26,10 @@ re-running if their output already exists, unless `--force` is passed.
    devices, `mkfs`, `mount`, and `grub-install`.
 7. `test-qemu` — boot `build/output.img` in `qemu-system-x86_64` with OVMF
    UEFI firmware.
+8. `write-usb --device /dev/sdX` — write `build/output.img` to a removable
+   device with `dd`. Refuses to run unless `/dev/sdX` exists, and (without
+   `--yes`) prompts you to retype the device path to confirm before
+   overwriting it. `list-devices` shows which removable disks are attached.
 
 Run everything with:
 
@@ -64,5 +68,6 @@ Once `build/output.img` boots successfully in QEMU, write it to a USB drive
 (replace `/dev/sdX` with your actual device — **this will erase the drive**):
 
 ```bash
-sudo dd if=build/output.img of=/dev/sdX bs=4M status=progress conv=fsync
+cargo run -- list-devices
+cargo run -- write-usb --device /dev/sdX
 ```

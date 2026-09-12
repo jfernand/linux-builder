@@ -32,6 +32,18 @@ pub enum Command {
     MakeImage,
     /// Boot the produced image in QEMU
     TestQemu,
+    /// List removable disks that look like USB sticks
+    ListDevices,
+    /// Write the built image to a removable device (DESTRUCTIVE)
+    WriteUsb {
+        /// Target device, e.g. /dev/sdb (must be a whole disk, not a partition)
+        #[arg(long)]
+        device: String,
+        /// Skip the interactive confirmation prompt (only for scripted use
+        /// after you've already verified the device yourself)
+        #[arg(long)]
+        yes: bool,
+    },
     /// Run the full pipeline end to end
     All,
 }
