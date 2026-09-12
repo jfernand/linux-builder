@@ -1,5 +1,6 @@
 use super::stage::STAGES;
 use crate::config::Config;
+use crate::stages::kernel::FEATURE_PACKS;
 use crate::stages::usb::Device;
 use anyhow::Result;
 use std::collections::VecDeque;
@@ -40,8 +41,15 @@ pub enum Screen {
     Settings { selected: usize },
 }
 
-/// Settings toggles shown on the Screen::Settings overlay.
-pub const SETTINGS_COUNT: usize = 2;
+/// Fixed settings toggles shown on the Screen::Settings overlay, before the
+/// dynamic list of kernel feature packs.
+pub const FIXED_SETTINGS_COUNT: usize = 2;
+
+/// Total rows on the Screen::Settings overlay: the fixed toggles plus one
+/// per entry in `FEATURE_PACKS`.
+pub fn settings_count() -> usize {
+    FIXED_SETTINGS_COUNT + FEATURE_PACKS.len()
+}
 
 pub enum AppEvent {
     Log(usize, String),
@@ -84,6 +92,20 @@ impl App {
 
     pub fn toggle_networking(&mut self) -> Result<()> {
         self.cfg.networking = !self.cfg.networking;
+        self.cfg.save(&self.config_path)
+    }
+
+    pub fn is_feature_enabled(&self, key: &str) -> bool {
+        self.cfg.kernel.features.iter().any(|f| f == key)
+    }
+
+    pub fn toggle_feature(&mut self, key: &str) -> Result<()> {
+        let features = &mut self.cfg.kernel.features;
+        if let Some(pos) = features.iter().position(|f| f == key) {
+            features.remove(pos);
+        } else {
+            features.push(key.to_string());
+        }
         self.cfg.save(&self.config_path)
     }
 

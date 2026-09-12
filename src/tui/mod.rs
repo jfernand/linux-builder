@@ -1,9 +1,10 @@
 mod app;
 mod stage;
 
+use crate::stages::kernel::FEATURE_PACKS;
 use crate::stages::usb::Device;
 use anyhow::Result;
-use app::{App, Screen, Status, SETTINGS_COUNT};
+use app::{settings_count, App, Screen, Status, FIXED_SETTINGS_COUNT};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, ExecutableCommand};
@@ -106,7 +107,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if *selected + 1 < SETTINGS_COUNT {
+                if *selected + 1 < settings_count() {
                     *selected += 1;
                 }
             }
@@ -120,7 +121,17 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     }
                 }
                 1 => app.force = !app.force,
-                _ => {}
+                i => {
+                    let key = FEATURE_PACKS[i - FIXED_SETTINGS_COUNT].key;
+                    if app.toggle_feature(key).is_err() {
+                        // Best-effort revert, same as the networking toggle above.
+                        if let Some(pos) = app.cfg.kernel.features.iter().position(|f| f == key) {
+                            app.cfg.kernel.features.remove(pos);
+                        } else {
+                            app.cfg.kernel.features.push(key.to_string());
+                        }
+                    }
+                }
             },
             _ => {}
         },
@@ -310,7 +321,7 @@ fn draw_device_picker(f: &mut Frame, area: Rect, devices: &[Device], selected: u
 
 fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
     let popup = centered_rect(60, 30, area);
-    let rows: [(&str, bool, &str); 2] = [
+    let mut rows: Vec<(&str, bool, &str)> = vec![
         (
             "Networking",
             app.cfg.networking,
@@ -322,6 +333,9 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
             "pass --force to the next stage you run",
         ),
     ];
+    for pack in FEATURE_PACKS {
+        rows.push((pack.label, app.is_feature_enabled(pack.key), pack.description));
+    }
 
     let items: Vec<ListItem> = rows
         .iter()

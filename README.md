@@ -99,7 +99,7 @@ needed, prompts once in the plain terminal before the dashboard takes over
 (spawned stages run with no stdin, so a password prompt from inside the
 dashboard would hang).
 
-`s` opens a settings screen with two toggles:
+`s` opens a settings screen with:
 
 - **Networking** — persisted to `linux-builder.toml`. When on, `build-userland`
   compiles BusyBox's `udhcpc`/`ifconfig`/`route`/`ping` applets,
@@ -110,6 +110,10 @@ dashboard would hang).
   `--force`. Toggling a build setting like networking only takes effect on
   the next `build-userland`/`assemble-rootfs`/`make-image` run of a stage
   that's already built once, so turn this on before re-running them.
+- One checkbox per kernel feature pack (see "Customizing the kernel config"
+  below), persisted to `kernel.features` in `linux-builder.toml`. Off by
+  default; toggling one only takes effect on the next `--force` run of
+  `build-kernel`.
 
 Run everything with:
 
