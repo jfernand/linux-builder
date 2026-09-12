@@ -3,6 +3,8 @@ pub mod toolchain;
 pub mod kernel;
 pub mod userland;
 pub mod rootfs;
+pub mod image;
+pub mod qemu;
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;

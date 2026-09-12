@@ -28,4 +28,10 @@ pub enum Command {
     BuildUserland,
     /// Assemble the root filesystem tree
     AssembleRootfs,
+    /// Partition and populate the bootable disk image
+    MakeImage,
+    /// Boot the produced image in QEMU
+    TestQemu,
+    /// Run the full pipeline end to end
+    All,
 }
