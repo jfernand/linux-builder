@@ -14,9 +14,14 @@ Three crates:
   README. Everything below (`cargo run -p distroless -- ...`) refers to it.
 - **`builder-core`** — the shared build-pipeline library `distroless` (and
   eventually `distro`) is built on. Not run directly.
-- **`distro`** — a scaffold for an alternative glibc + traditional-tools
-  (util-linux, shadow-utils, a standalone init) build path. Not implemented
-  yet; `cargo run -p distro` just prints a placeholder.
+- **`distro`** — a from-scratch glibc distro: our own kernel (reusing
+  `builder-core` unchanged), a Rust-first userland (`cargo`/`rustup` on the
+  built system, uutils/coreutils, and a curated set of Rust CLI tools), and
+  eventually a COSMIC desktop — built entirely from upstream source, not
+  bootstrapped off another distro's packages. Very early stage: only
+  `fetch` (kernel source) is implemented; every other subcommand reports
+  "not yet implemented." Config is `distro.toml`, separate from
+  `distroless.toml`.
 
 ## Pipeline stages
 

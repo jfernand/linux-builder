@@ -404,6 +404,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "builder-core",
+ "clap",
+ "serde",
+ "toml",
 ]
 
 [[package]]

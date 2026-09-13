@@ -1,0 +1,11 @@
+build_dir = "build-distro"
+networking = false
+
+[kernel]
+version = "6.17"
+url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.17.tar.xz"
+
+[image]
+arch = "x86_64"
+size_mb = 2048
+hostname = "distro"

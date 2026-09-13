@@ -1,5 +1,6 @@
 /target
 /linux-6.17/
 /build/
+/build-distro/
 .idea/
 restart
