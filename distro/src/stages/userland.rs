@@ -8,6 +8,16 @@ use std::process::Command;
 /// beyond the toolchain already on the machine is needed.
 const GNU_TARGET: &str = "x86_64-unknown-linux-gnu";
 
+/// Cargo's actual output directory for a build run from `source_dir` —
+/// normally `source_dir/target`, but cargo honors `CARGO_TARGET_DIR` when
+/// set (e.g. to a shared build cache outside the repo), which overrides
+/// that per-project default entirely.
+fn cargo_target_dir(source_dir: &std::path::Path) -> std::path::PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| source_dir.join("target"))
+}
+
 pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_uutils(cfg, force)?;
     build_bash(cfg, force)?;
@@ -19,7 +29,7 @@ pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
 
 fn build_uutils(cfg: &Config, force: bool) -> Result<()> {
     let dir = cfg.uutils_build_dir();
-    let binary = dir.join("target").join(GNU_TARGET).join("release").join("coreutils");
+    let binary = cargo_target_dir(&dir).join(GNU_TARGET).join("release").join("coreutils");
 
     if already_built(&binary, force) {
         println!("skip build-uutils: {} already exists", binary.display());
@@ -186,16 +196,15 @@ fn build_init(force: bool) -> Result<()> {
 
 /// Where `build_init` leaves the compiled binary — a workspace `target/`
 /// path, not under `cfg.build_dir` like the fetched sources, since it's
-/// built in place from source already in this repo.
+/// built in place from source already in this repo. Honors `CARGO_TARGET_DIR`
+/// (cargo itself does, so a plain `"target"` guess breaks whenever that's
+/// set, e.g. to a shared build cache outside the repo).
 pub fn init_binary_path() -> std::path::PathBuf {
-    std::path::PathBuf::from("target")
-        .join(GNU_TARGET)
-        .join("release")
-        .join("distro-init")
+    cargo_target_dir(&std::path::PathBuf::from(".")).join(GNU_TARGET).join("release").join("distro-init")
 }
 
 pub fn uutils_binary_path(cfg: &Config) -> std::path::PathBuf {
-    cfg.uutils_build_dir().join("target").join(GNU_TARGET).join("release").join("coreutils")
+    cargo_target_dir(&cfg.uutils_build_dir()).join(GNU_TARGET).join("release").join("coreutils")
 }
 
 pub fn agetty_binary_path(cfg: &Config) -> std::path::PathBuf {
