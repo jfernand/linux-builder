@@ -1,13 +1,6 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use builder_core::stages::KernelChannel;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-
-#[derive(Clone, Copy, ValueEnum)]
-pub enum KernelChannel {
-    /// The current mainline stable release
-    Stable,
-    /// The newest maintained long-term-support branch
-    Lts,
-}
 
 #[derive(Parser)]
 #[command(name = "linux-builder", about = "Orchestrates building a minimal bootable Linux distro")]

@@ -1,10 +1,18 @@
 use super::{already_built, run_in};
-use crate::cli::KernelChannel;
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum KernelChannel {
+    /// The current mainline stable release
+    Stable,
+    /// The newest maintained long-term-support branch
+    Lts,
+}
 
 pub fn build_kernel(cfg: &Config, force: bool) -> Result<()> {
     let dir = cfg.kernel_build_dir();

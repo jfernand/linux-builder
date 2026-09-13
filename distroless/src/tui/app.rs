@@ -1,7 +1,7 @@
 use super::stage::STAGES;
-use crate::config::Config;
-use crate::stages::kernel::FEATURE_PACKS;
-use crate::stages::usb::Device;
+use builder_core::config::Config;
+use builder_core::stages::kernel::FEATURE_PACKS;
+use builder_core::stages::usb::Device;
 use anyhow::Result;
 use std::collections::VecDeque;
 use std::io::Read;
@@ -188,7 +188,7 @@ impl App {
     }
 
     pub fn open_device_picker(&mut self) {
-        match crate::stages::usb::list_removable_devices() {
+        match builder_core::stages::usb::list_removable_devices() {
             Ok(devices) => {
                 self.screen = Screen::DevicePicker { devices, selected: 0, error: None };
             }

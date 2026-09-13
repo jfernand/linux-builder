@@ -41,8 +41,8 @@ re-running if their output already exists, unless `--force` is passed.
 hand-editing those, resolve them from kernel.org's current releases:
 
 ```bash
-cargo run -- resolve-kernel --channel stable   # latest mainline stable release
-cargo run -- resolve-kernel --channel lts      # newest maintained long-term-support branch
+cargo run -p distroless -- resolve-kernel --channel stable   # latest mainline stable release
+cargo run -p distroless -- resolve-kernel --channel lts      # newest maintained long-term-support branch
 ```
 
 This writes the resolved `version`/`url` into the config file. Run
@@ -57,7 +57,7 @@ By default (no `kernel.config_file` set), `build-kernel` starts from
 NIC/PATA/PCMCIA drivers, netfilter, NFS, quotas/ACLs/SELinux, IOMMU, debug
 instrumentation, 32-bit compat, and ISO9660) — everything needed to boot
 (PCI, ACPI, EFI, ATA/virtio block, ext4/vfat, console) is left untouched.
-Run `cargo run -- list-features` to see the full set, each named after what
+Run `cargo run -p distroless -- list-features` to see the full set, each named after what
 it re-enables:
 
 ```
@@ -83,8 +83,8 @@ For finer control than the named packs give you, hand-edit the config
 instead:
 
 ```bash
-cargo run -- fetch          # need the kernel source extracted first
-cargo run -- menu-config    # opens `make menuconfig`; saves to ./kernel.config on exit
+cargo run -p distroless -- fetch          # need the kernel source extracted first
+cargo run -p distroless -- menu-config    # opens `make menuconfig`; saves to ./kernel.config on exit
 ```
 
 Add the printed path to `linux-builder.toml`:
@@ -116,7 +116,7 @@ logo" checkbox) on the settings screen and press `e` to browse for it.
 ## Interactive dashboard (TUI)
 
 ```bash
-cargo run -- tui
+cargo run -p distroless -- tui
 ```
 
 Runs every stage from an interactive dashboard instead of the command line:
@@ -153,20 +153,20 @@ dashboard would hang).
 Run everything with:
 
 ```bash
-cargo run -- all
-cargo run -- test-qemu
+cargo run -p distroless -- all
+cargo run -p distroless -- test-qemu
 ```
 
 Or run stages individually:
 
 ```bash
-cargo run -- fetch
-cargo run -- build-toolchain
-cargo run -- build-kernel
-cargo run -- build-userland
-cargo run -- assemble-rootfs
-cargo run -- make-image
-cargo run -- test-qemu
+cargo run -p distroless -- fetch
+cargo run -p distroless -- build-toolchain
+cargo run -p distroless -- build-kernel
+cargo run -p distroless -- build-userland
+cargo run -p distroless -- assemble-rootfs
+cargo run -p distroless -- make-image
+cargo run -p distroless -- test-qemu
 ```
 
 Configuration (kernel/BusyBox versions, image size, hostname, etc.) lives in
@@ -193,8 +193,8 @@ Once `build/output.img` boots successfully in QEMU, write it to a USB drive
 (replace `/dev/sdX` with your actual device — **this will erase the drive**):
 
 ```bash
-cargo run -- list-devices
-cargo run -- write-usb --device /dev/sdX
+cargo run -p distroless -- list-devices
+cargo run -p distroless -- write-usb --device /dev/sdX
 ```
 
 or equivalently, from the TUI's "Write to USB" screen.

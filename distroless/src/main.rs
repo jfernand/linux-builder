@@ -1,12 +1,11 @@
 mod cli;
-mod config;
-mod stages;
 mod tui;
 
 use anyhow::{bail, Result};
+use builder_core::config::Config;
+use builder_core::stages;
 use clap::Parser;
 use cli::{Cli, Command};
-use config::Config;
 use std::io::Write;
 
 fn main() -> Result<()> {

@@ -1,5 +1,5 @@
-use crate::config::Config;
-use crate::stages::toolchain::musl_target;
+use builder_core::config::Config;
+use builder_core::stages::toolchain::musl_target;
 use anyhow::Result;
 use std::path::PathBuf;
 

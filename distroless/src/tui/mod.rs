@@ -1,8 +1,8 @@
 mod app;
 mod stage;
 
-use crate::stages::kernel::FEATURE_PACKS;
-use crate::stages::usb::Device;
+use builder_core::stages::kernel::FEATURE_PACKS;
+use builder_core::stages::usb::Device;
 use anyhow::Result;
 use app::{settings_rows, App, Screen, SettingsRow, Status};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};

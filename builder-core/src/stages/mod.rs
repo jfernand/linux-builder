@@ -7,6 +7,8 @@ pub mod image;
 pub mod qemu;
 pub mod usb;
 
+pub use kernel::KernelChannel;
+
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;

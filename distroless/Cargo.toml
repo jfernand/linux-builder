@@ -1,0 +1,11 @@
+[package]
+name = "distroless"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+builder-core = { path = "../builder-core" }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+ratatui = "0.30"
+crossterm = "0.29"
