@@ -6,6 +6,18 @@ BusyBox for shell/init), and a bootable GPT disk image (EFI System Partition
 + ext4 root) that can be written to a USB stick with `dd` and booted on real
 hardware (or tested first in QEMU).
 
+## Workspace layout
+
+Three crates:
+
+- **`distroless`** — the musl/BusyBox-based CLI and TUI described in this
+  README. Everything below (`cargo run -p distroless -- ...`) refers to it.
+- **`builder-core`** — the shared build-pipeline library `distroless` (and
+  eventually `distro`) is built on. Not run directly.
+- **`distro`** — a scaffold for an alternative glibc + traditional-tools
+  (util-linux, shadow-utils, a standalone init) build path. Not implemented
+  yet; `cargo run -p distro` just prints a placeholder.
+
 ## Pipeline stages
 
 Each stage is a subcommand and can be run independently; stages skip

@@ -1,0 +1,8 @@
+[package]
+name = "distro"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+builder-core = { path = "../builder-core" }
+anyhow = "1"

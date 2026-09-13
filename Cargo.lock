@@ -399,6 +399,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "distro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "builder-core",
+]
+
+[[package]]
 name = "distroless"
 version = "0.1.0"
 dependencies = [
