@@ -146,12 +146,17 @@ fn populate_mounted(
     // ESP itself (the partition it was loaded from), not --boot-directory,
     // so the grub.cfg that's actually read at boot time must live under
     // <ESP>/boot/grub/grub.cfg, not <root>/boot/grub/grub.cfg.
-    write_grub_cfg(&esp_target.join("boot"), root_fs_uuid, root_part_uuid)?;
+    write_grub_cfg(&esp_target.join("boot"), &cfg.image.hostname, root_fs_uuid, root_part_uuid)?;
 
     Ok(())
 }
 
-fn write_grub_cfg(grub_boot_dir: &Path, root_fs_uuid: &str, root_part_uuid: &str) -> Result<()> {
+fn write_grub_cfg(
+    grub_boot_dir: &Path,
+    hostname: &str,
+    root_fs_uuid: &str,
+    root_part_uuid: &str,
+) -> Result<()> {
     let grub_dir = grub_boot_dir.join("grub");
     run(Command::new("sudo").args(["mkdir", "-p", grub_dir.to_str().unwrap()]))?;
 
@@ -160,7 +165,7 @@ fn write_grub_cfg(grub_boot_dir: &Path, root_fs_uuid: &str, root_part_uuid: &str
     // filesystem UUID= (that resolution normally happens in userspace/initrd).
     let cfg = format!(
         "set timeout=3\n\
-         menuentry \"linux-builder\" {{\n\
+         menuentry \"{hostname}\" {{\n\
          \tsearch --no-floppy --fs-uuid --set=root {root_fs_uuid}\n\
          \tlinux ($root)/boot/vmlinuz root=PARTUUID={root_part_uuid} rw console=tty0 console=ttyS0,115200\n\
          }}\n"
