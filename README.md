@@ -22,7 +22,8 @@ Three crates:
   `build-kernel`, `make-image`, `test-qemu`, `write-usb`, and `list-devices`
   work today (reusing `builder-core` as-is); `build-toolchain`,
   `build-userland`, and `assemble-rootfs` aren't implemented yet. Config is
-  `distro.toml`, separate from `distroless.toml`.
+  `distro.toml` (copy `distro.toml.example` to get started), separate from
+  `distroless.toml`.
 
 ## Pipeline stages
 
@@ -188,7 +189,9 @@ cargo run -p distroless -- test-qemu
 ```
 
 Configuration (kernel/BusyBox versions, image size, hostname, etc.) lives in
-`distroless.toml`.
+`distroless.toml` — copy `distroless.toml.example` to `distroless.toml` to
+get started (the real file is gitignored, so your local edits — networking,
+feature packs, hostname, ...  — never show up as changes to commit).
 
 Boot lands on a `login:` prompt (BusyBox `getty`+`login` on both `tty1` and
 the serial console) for a single `root` account with **no password** — enter

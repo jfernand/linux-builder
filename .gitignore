@@ -4,3 +4,5 @@
 /build-distro/
 .idea/
 restart
+/distroless.toml
+/distro.toml
