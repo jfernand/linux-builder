@@ -100,7 +100,15 @@ fn handle_key(app: &mut App, code: KeyCode) {
                 if STAGES[app.selected].needs_device() {
                     app.open_device_picker();
                 } else {
-                    app.run_stage(app.selected, None);
+                    app.run_stage(app.selected, None, false);
+                }
+            }
+            KeyCode::Char('f') => {
+                // Force-rebuild the selected stage. Not meaningful for
+                // WriteUsb (it has no "already done" check to bypass; it
+                // always re-confirms and re-writes), so it's a no-op there.
+                if app.running.is_none() && !STAGES[app.selected].needs_device() {
+                    app.run_stage(app.selected, None, true);
                 }
             }
             _ => {}
@@ -126,7 +134,6 @@ fn handle_key(app: &mut App, code: KeyCode) {
                         app.cfg.networking = !app.cfg.networking;
                     }
                 }
-                SettingsRow::ForceRebuild => app.force = !app.force,
                 SettingsRow::Hostname | SettingsRow::CustomLogo => {} // press `e` to edit
                 SettingsRow::Feature(i) => {
                     let key = FEATURE_PACKS[i].key;
@@ -246,7 +253,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     let device_path = device.path();
                     app.screen = Screen::Dashboard;
                     let idx = STAGES.iter().position(|s| s.needs_device()).unwrap();
-                    app.run_stage(idx, Some(&device_path));
+                    app.run_stage(idx, Some(&device_path), false);
                 }
             }
             _ => {}
@@ -332,10 +339,7 @@ fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let text = if app.running.is_some() {
         "running... (q to quit once idle)".to_string()
     } else {
-        format!(
-            "up/down: select  enter: run  c: clean  s: settings  q/esc: quit{}",
-            if app.force { "  [force: ON]" } else { "" }
-        )
+        "up/down: select  enter: run  f: force-run  c: clean  s: settings  q/esc: quit".to_string()
     };
     f.render_widget(Paragraph::new(text), area);
 }
@@ -404,11 +408,6 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
                     checkbox(app.cfg.networking),
                     "Networking".to_string(),
                     "busybox udhcpc/ifconfig/route/ping, DHCP at boot, QEMU NIC".to_string(),
-                ),
-                SettingsRow::ForceRebuild => (
-                    checkbox(app.force),
-                    "Force rebuild (this session)".to_string(),
-                    "pass --force to the next stage you run".to_string(),
                 ),
                 SettingsRow::Hostname => (
                     "   ",

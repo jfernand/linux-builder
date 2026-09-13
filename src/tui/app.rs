@@ -52,7 +52,6 @@ pub struct PickerEntry {
 #[derive(Clone, Copy)]
 pub enum SettingsRow {
     Networking,
-    ForceRebuild,
     Hostname,
     /// Index into `FEATURE_PACKS`.
     Feature(usize),
@@ -64,7 +63,7 @@ pub enum SettingsRow {
 /// fresh each time (cheap: FEATURE_PACKS is tiny) rather than cached, so
 /// there's one source of truth for row order, indices, and row count.
 pub fn settings_rows() -> Vec<SettingsRow> {
-    let mut rows = vec![SettingsRow::Networking, SettingsRow::ForceRebuild, SettingsRow::Hostname];
+    let mut rows = vec![SettingsRow::Networking, SettingsRow::Hostname];
     for (i, pack) in FEATURE_PACKS.iter().enumerate() {
         rows.push(SettingsRow::Feature(i));
         if pack.key == "boot-logo" {
@@ -82,10 +81,6 @@ pub enum AppEvent {
 pub struct App {
     pub config_path: PathBuf,
     pub cfg: Config,
-    /// Pass --force to the next stage run. Session-only, not persisted:
-    /// a one-shot "rebuild even if already built" switch, distinct from
-    /// `cfg.networking` and friends which are persisted build settings.
-    pub force: bool,
     pub stages: Vec<StageState>,
     pub selected: usize,
     pub screen: Screen,
@@ -102,7 +97,6 @@ impl App {
         Ok(App {
             config_path,
             cfg,
-            force: false,
             stages: STAGES.iter().map(|_| StageState::default()).collect(),
             selected: 0,
             screen: Screen::Dashboard,
@@ -228,7 +222,7 @@ impl App {
         }
     }
 
-    pub fn run_stage(&mut self, idx: usize, device: Option<&str>) {
+    pub fn run_stage(&mut self, idx: usize, device: Option<&str>, force: bool) {
         if self.running.is_some() {
             return;
         }
@@ -240,7 +234,7 @@ impl App {
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("linux-builder"));
         let mut args = vec!["--config".to_string(), self.config_path.to_string_lossy().to_string()];
         args.extend(kind.subcommand_args(device));
-        if self.force {
+        if force {
             args.push("--force".to_string());
         }
 

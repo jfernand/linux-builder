@@ -121,7 +121,8 @@ cargo run -- tui
 
 Runs every stage from an interactive dashboard instead of the command line:
 arrow keys (or `j`/`k`) select a stage, `Enter` runs it with live log output
-in the right-hand pane, and `q`/`Esc` quits. "Test in QEMU" instead opens
+in the right-hand pane, `f` runs it with `--force` (bypassing the "already
+built" skip), and `q`/`Esc` quits. "Test in QEMU" instead opens
 QEMU's own graphical window (the dashboard has no stdin to hand it an
 interactive serial console); the dashboard stays on that stage until you
 close the window. Selecting "Write to USB" opens a
@@ -139,14 +140,10 @@ dashboard would hang).
   `assemble-rootfs` installs a udhcpc lease script and brings up DHCP on
   `eth0` at boot, and `test-qemu` adds a NIC (QEMU user-mode NAT, with a
   built-in DHCP server — no host root needed). Off by default.
-- **Force rebuild** — session-only (not persisted), equivalent to the CLI's
-  `--force`. Toggling a build setting like networking only takes effect on
-  the next `build-userland`/`assemble-rootfs`/`make-image` run of a stage
-  that's already built once, so turn this on before re-running them.
 - One checkbox per kernel feature pack (see "Customizing the kernel config"
   below), persisted to `kernel.features` in `linux-builder.toml`. Off by
-  default; toggling one only takes effect on the next `--force` run of
-  `build-kernel`. **Custom logo file** sits right under the "Boot logo"
+  default; toggling one only takes effect the next time you run that stage
+  with `f`. **Custom logo file** sits right under the "Boot logo"
   checkbox: press `e` to open a directory browser (arrows to navigate,
   `Enter` on a folder to open it or `..` to go up, `Enter` on a `.ppm` file
   to pick it) instead of typing a path.
