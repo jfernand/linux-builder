@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     pub kernel: KernelConfig,
     pub busybox: BusyboxConfig,
@@ -18,7 +18,7 @@ pub struct Config {
     pub networking: bool,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct KernelConfig {
     pub version: String,
     pub url: String,
@@ -38,19 +38,19 @@ pub struct KernelConfig {
     pub logo_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BusyboxConfig {
     pub version: String,
     pub url: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UutilsConfig {
     pub git_url: String,
     pub git_rev: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ImageConfig {
     #[allow(dead_code)] // reserved for future multi-arch support
     pub arch: String,
