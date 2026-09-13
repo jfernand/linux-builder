@@ -410,6 +410,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "distro-init"
+version = "0.1.0"
+dependencies = [
+ "nix",
+]
+
+[[package]]
 name = "distroless"
 version = "0.1.0"
 dependencies = [
