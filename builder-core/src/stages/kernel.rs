@@ -346,7 +346,7 @@ fn disable_options(text: &mut String, options: &[&str]) {
 fn enable_features(cfg: &Config, text: &mut String) -> Result<()> {
     for key in &cfg.kernel.features {
         let pack = feature_pack(key).with_context(|| {
-            format!("unknown kernel feature \"{key}\" (see `linux-builder list-features`)")
+            format!("unknown kernel feature \"{key}\" (see `distroless list-features`)")
         })?;
         println!("enabling kernel feature: {} ({})", pack.label, pack.key);
         for option in pack.options {

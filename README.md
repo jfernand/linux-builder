@@ -49,7 +49,7 @@ re-running if their output already exists, unless `--force` is passed.
 
 ## Picking a kernel version
 
-`linux-builder.toml`'s `[kernel]` pins an exact `version`/`url`. Instead of
+`distroless.toml`'s `[kernel]` pins an exact `version`/`url`. Instead of
 hand-editing those, resolve them from kernel.org's current releases:
 
 ```bash
@@ -79,7 +79,7 @@ wireless    Wi-Fi stack (cfg80211/mac80211) and rfkill
 ...
 ```
 
-Turn any of them on with `kernel.features` in `linux-builder.toml`:
+Turn any of them on with `kernel.features` in `distroless.toml`:
 
 ```toml
 [kernel]
@@ -99,7 +99,7 @@ cargo run -p distroless -- fetch          # need the kernel source extracted fir
 cargo run -p distroless -- menu-config    # opens `make menuconfig`; saves to ./kernel.config on exit
 ```
 
-Add the printed path to `linux-builder.toml`:
+Add the printed path to `distroless.toml`:
 
 ```toml
 [kernel]
@@ -147,13 +147,13 @@ dashboard would hang).
 
 `s` opens a settings screen with:
 
-- **Networking** — persisted to `linux-builder.toml`. When on, `build-userland`
+- **Networking** — persisted to `distroless.toml`. When on, `build-userland`
   compiles BusyBox's `udhcpc`/`ifconfig`/`route`/`ping` applets,
   `assemble-rootfs` installs a udhcpc lease script and brings up DHCP on
   `eth0` at boot, and `test-qemu` adds a NIC (QEMU user-mode NAT, with a
   built-in DHCP server — no host root needed). Off by default.
 - One checkbox per kernel feature pack (see "Customizing the kernel config"
-  below), persisted to `kernel.features` in `linux-builder.toml`. Off by
+  below), persisted to `kernel.features` in `distroless.toml`. Off by
   default; toggling one only takes effect the next time you run that stage
   with `f`. **Custom logo file** sits right under the "Boot logo"
   checkbox: press `e` to open a directory browser (arrows to navigate,
@@ -182,7 +182,7 @@ cargo run -p distroless -- test-qemu
 ```
 
 Configuration (kernel/BusyBox versions, image size, hostname, etc.) lives in
-`linux-builder.toml`.
+`distroless.toml`.
 
 Boot lands on a `login:` prompt (BusyBox `getty`+`login` on both `tty1` and
 the serial console) for a single `root` account with **no password** — enter

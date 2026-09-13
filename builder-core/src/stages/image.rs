@@ -170,7 +170,7 @@ fn write_grub_cfg(
          \tlinux ($root)/boot/vmlinuz root=PARTUUID={root_part_uuid} rw console=tty0 console=ttyS0,115200\n\
          }}\n"
     );
-    let tmp = std::env::temp_dir().join("linux-builder-grub.cfg");
+    let tmp = std::env::temp_dir().join("distroless-grub.cfg");
     std::fs::write(&tmp, cfg)?;
     run(Command::new("sudo").args([
         "cp",

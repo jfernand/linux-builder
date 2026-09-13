@@ -37,7 +37,7 @@ fn run_all(cfg: &Config, force: bool) -> Result<()> {
     stages::userland::build_userland(cfg, force)?;
     stages::rootfs::assemble_rootfs(cfg, force)?;
     stages::image::make_image(cfg, force)?;
-    println!("done. run `linux-builder test-qemu` to boot the image in QEMU.");
+    println!("done. run `distroless test-qemu` to boot the image in QEMU.");
     Ok(())
 }
 
