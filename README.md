@@ -130,6 +130,8 @@ dashboard would hang).
   below), persisted to `kernel.features` in `linux-builder.toml`. Off by
   default; toggling one only takes effect on the next `--force` run of
   `build-kernel`.
+- **Hostname** is free text, not a checkbox: select it and press `e` to
+  edit, `Enter` to save, `Esc` to cancel.
 
 Run everything with:
 

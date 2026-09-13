@@ -121,6 +121,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     }
                 }
                 1 => app.force = !app.force,
+                2 => {} // Hostname: not a toggle, press `e` to edit
                 i => {
                     let key = FEATURE_PACKS[i - FIXED_SETTINGS_COUNT].key;
                     if app.toggle_feature(key).is_err() {
@@ -133,6 +134,24 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     }
                 }
             },
+            KeyCode::Char('e') => {
+                if *selected == 2 {
+                    app.screen = Screen::EditHostname { typed: app.cfg.image.hostname.clone() };
+                }
+            }
+            _ => {}
+        },
+        Screen::EditHostname { typed } => match code {
+            KeyCode::Esc => app.screen = Screen::Settings { selected: 2 },
+            KeyCode::Backspace => {
+                typed.pop();
+            }
+            KeyCode::Char(c) => typed.push(c),
+            KeyCode::Enter => {
+                let typed = typed.clone();
+                app.screen = Screen::Settings { selected: 2 };
+                let _ = app.set_hostname(&typed);
+            }
             _ => {}
         },
         Screen::ConfirmClean { idx } => match code {
@@ -207,6 +226,7 @@ fn draw(f: &mut Frame, app: &App) {
         Screen::ConfirmWrite { device, typed } => draw_confirm(f, size, device, typed),
         Screen::ConfirmClean { idx } => draw_confirm_clean(f, size, STAGES[*idx].label()),
         Screen::Settings { selected } => draw_settings(f, size, app, *selected),
+        Screen::EditHostname { typed } => draw_edit_text(f, size, "Hostname", typed),
         Screen::Dashboard => {}
     }
 }
@@ -321,27 +341,32 @@ fn draw_device_picker(f: &mut Frame, area: Rect, devices: &[Device], selected: u
 
 fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
     let popup = centered_rect(60, 30, area);
-    let mut rows: Vec<(&str, bool, &str)> = vec![
+    let mut rows: Vec<(String, bool, String)> = vec![
         (
-            "Networking",
+            "Networking".to_string(),
             app.cfg.networking,
-            "busybox udhcpc/ifconfig/route/ping, DHCP at boot, QEMU NIC",
+            "busybox udhcpc/ifconfig/route/ping, DHCP at boot, QEMU NIC".to_string(),
         ),
         (
-            "Force rebuild (this session)",
+            "Force rebuild (this session)".to_string(),
             app.force,
-            "pass --force to the next stage you run",
+            "pass --force to the next stage you run".to_string(),
+        ),
+        (
+            "Hostname".to_string(),
+            false,
+            format!("{} (e to change)", app.cfg.image.hostname),
         ),
     ];
     for pack in FEATURE_PACKS {
-        rows.push((pack.label, app.is_feature_enabled(pack.key), pack.description));
+        rows.push((pack.label.to_string(), app.is_feature_enabled(pack.key), pack.description.to_string()));
     }
 
     let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
         .map(|(i, (label, on, desc))| {
-            let mark = if *on { "[x]" } else { "[ ]" };
+            let mark = if i == 2 { "   " } else if *on { "[x]" } else { "[ ]" };
             let style = if i == selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -354,7 +379,7 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title("Settings (enter/space: toggle, esc: close)"),
+            .title("Settings (enter/space: toggle, e: edit, esc: close)"),
     );
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(list, popup);
@@ -375,6 +400,18 @@ fn draw_confirm(f: &mut Frame, area: Rect, device: &Device, typed: &str) {
         Line::from("enter: confirm  esc: cancel"),
     ];
     let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Confirm write"));
+    f.render_widget(ratatui::widgets::Clear, popup);
+    f.render_widget(paragraph, popup);
+}
+
+fn draw_edit_text(f: &mut Frame, area: Rect, label: &str, typed: &str) {
+    let popup = centered_rect(60, 20, area);
+    let text = vec![
+        Line::from(format!("{label}: {typed}")),
+        Line::from(""),
+        Line::from("enter: save  esc: cancel"),
+    ];
+    let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Edit"));
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(paragraph, popup);
 }

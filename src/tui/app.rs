@@ -39,11 +39,12 @@ pub enum Screen {
     ConfirmWrite { device: Device, typed: String },
     ConfirmClean { idx: usize },
     Settings { selected: usize },
+    EditHostname { typed: String },
 }
 
 /// Fixed settings toggles shown on the Screen::Settings overlay, before the
-/// dynamic list of kernel feature packs.
-pub const FIXED_SETTINGS_COUNT: usize = 2;
+/// dynamic list of kernel feature packs: Networking, Force rebuild, Hostname.
+pub const FIXED_SETTINGS_COUNT: usize = 3;
 
 /// Total rows on the Screen::Settings overlay: the fixed toggles plus one
 /// per entry in `FEATURE_PACKS`.
@@ -106,6 +107,17 @@ impl App {
         } else {
             features.push(key.to_string());
         }
+        self.cfg.save(&self.config_path)
+    }
+
+    /// Sets `image.hostname` and persists it. A blank value is ignored
+    /// rather than shipping an empty hostname.
+    pub fn set_hostname(&mut self, hostname: &str) -> Result<()> {
+        let hostname = hostname.trim();
+        if hostname.is_empty() {
+            return Ok(());
+        }
+        self.cfg.image.hostname = hostname.to_string();
         self.cfg.save(&self.config_path)
     }
 
