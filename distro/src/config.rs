@@ -5,18 +5,40 @@ use std::path::{Path, PathBuf};
 
 /// `distro`'s own config shape. Deliberately does *not* reuse
 /// `builder_core::config::Config` wholesale — that struct requires a
-/// `[busybox]`/`[uutils]` section neither of which `distro` has any use
-/// for (see `to_builder_core` below). `KernelConfig`/`ImageConfig` are
-/// reused directly since they're genuinely identical between the two
-/// distros.
+/// `[busybox]` section `distro` has no use for (see `to_builder_core`
+/// below). `KernelConfig`/`ImageConfig`/`UutilsConfig` are reused directly
+/// since they're genuinely identical between the two distros; `bash` is
+/// distro-specific (distroless uses BusyBox's `ash` instead).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     pub kernel: KernelConfig,
+    pub uutils: UutilsConfig,
+    pub bash: BashConfig,
+    pub util_linux: UtilLinuxConfig,
+    pub shadow: ShadowConfig,
     pub image: ImageConfig,
     #[serde(default = "default_build_dir")]
     pub build_dir: PathBuf,
     #[serde(default)]
     pub networking: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BashConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UtilLinuxConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ShadowConfig {
+    pub version: String,
+    pub url: String,
 }
 
 /// Deliberately distinct from `distroless`'s default (`build`) so running
@@ -50,7 +72,24 @@ impl Config {
             .join(format!("linux-{}", self.kernel.version))
     }
 
-    #[allow(dead_code)] // used once assemble_rootfs is implemented (Phase 1)
+    pub fn uutils_build_dir(&self) -> PathBuf {
+        self.build_dir.join("uutils")
+    }
+
+    pub fn bash_build_dir(&self) -> PathBuf {
+        self.build_dir.join("bash").join(format!("bash-{}", self.bash.version))
+    }
+
+    pub fn util_linux_build_dir(&self) -> PathBuf {
+        self.build_dir
+            .join("util-linux")
+            .join(format!("util-linux-{}", self.util_linux.version))
+    }
+
+    pub fn shadow_build_dir(&self) -> PathBuf {
+        self.build_dir.join("shadow").join(format!("shadow-{}", self.shadow.version))
+    }
+
     pub fn rootfs_dir(&self) -> PathBuf {
         self.build_dir.join("rootfs")
     }
@@ -68,7 +107,7 @@ impl Config {
         builder_core::config::Config {
             kernel: self.kernel.clone(),
             busybox: BusyboxConfig { version: String::new(), url: String::new() },
-            uutils: UutilsConfig { git_url: String::new(), git_rev: String::new() },
+            uutils: self.uutils.clone(),
             image: self.image.clone(),
             build_dir: self.build_dir.clone(),
             networking: self.networking,

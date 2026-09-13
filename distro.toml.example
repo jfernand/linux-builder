@@ -5,6 +5,22 @@ networking = false
 version = "6.17"
 url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.17.tar.xz"
 
+[uutils]
+git_url = "https://github.com/uutils/coreutils.git"
+git_rev = "main"
+
+[bash]
+version = "5.2.37"
+url = "https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz"
+
+[util_linux]
+version = "2.41.2"
+url = "https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.41/util-linux-2.41.2.tar.xz"
+
+[shadow]
+version = "4.17.4"
+url = "https://github.com/shadow-maint/shadow/releases/download/4.17.4/shadow-4.17.4.tar.xz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048
