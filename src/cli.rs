@@ -1,5 +1,13 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum KernelChannel {
+    /// The current mainline stable release
+    Stable,
+    /// The newest maintained long-term-support branch
+    Lts,
+}
 
 #[derive(Parser)]
 #[command(name = "linux-builder", about = "Orchestrates building a minimal bootable Linux distro")]
@@ -26,6 +34,12 @@ pub enum Command {
     },
     /// Ensure the musl toolchain and cargo musl target are available
     BuildToolchain,
+    /// Look up the current stable or LTS kernel release on kernel.org and
+    /// write its version/url into the config file's [kernel] section
+    ResolveKernel {
+        #[arg(long, value_enum)]
+        channel: KernelChannel,
+    },
     /// Configure and build the kernel
     BuildKernel,
     /// Interactively customize the kernel config with `make menuconfig` and

@@ -16,6 +16,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Fetch { clean } => stages::fetch::fetch(&cfg, cli.force, clean),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
+        Command::ResolveKernel { channel } => stages::kernel::resolve_kernel(&cli.config, channel),
         Command::BuildKernel => stages::kernel::build_kernel(&cfg, cli.force),
         Command::MenuConfig { save_to } => stages::kernel::menuconfig(&cfg, &save_to),
         Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),

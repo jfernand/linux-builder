@@ -35,6 +35,20 @@ re-running if their output already exists, unless `--force` is passed.
    `--yes`) prompts you to retype the device path to confirm before
    overwriting it. `list-devices` shows which removable disks are attached.
 
+## Picking a kernel version
+
+`linux-builder.toml`'s `[kernel]` pins an exact `version`/`url`. Instead of
+hand-editing those, resolve them from kernel.org's current releases:
+
+```bash
+cargo run -- resolve-kernel --channel stable   # latest mainline stable release
+cargo run -- resolve-kernel --channel lts      # newest maintained long-term-support branch
+```
+
+This writes the resolved `version`/`url` into the config file. Run
+`fetch --clean` afterwards if you'd already downloaded a different version's
+sources.
+
 ## Customizing the kernel config
 
 By default (no `kernel.config_file` set), `build-kernel` starts from

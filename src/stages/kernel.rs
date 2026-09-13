@@ -1,6 +1,8 @@
 use super::{already_built, run_in};
+use crate::cli::KernelChannel;
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 use std::path::Path;
 use std::process::Command;
 
@@ -383,6 +385,71 @@ pub fn menuconfig(cfg: &Config, save_to: &Path) -> Result<()> {
     );
 
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct ReleaseFeed {
+    releases: Vec<Release>,
+}
+
+#[derive(Deserialize)]
+struct Release {
+    moniker: String,
+    version: String,
+    iseol: bool,
+    source: Option<String>,
+}
+
+/// Looks up the current stable or long-term-support release from
+/// kernel.org's release feed and writes its version/url into the config
+/// file's `[kernel]` section, so `fetch`/`build-kernel` pick it up as-is.
+pub fn resolve_kernel(config_path: &Path, channel: KernelChannel) -> Result<()> {
+    let moniker = match channel {
+        KernelChannel::Stable => "stable",
+        KernelChannel::Lts => "longterm",
+    };
+
+    println!("checking kernel.org for the current {moniker} release");
+    let output = Command::new("wget")
+        .args(["-qO-", "https://www.kernel.org/releases.json"])
+        .output()
+        .context("running wget")?;
+    if !output.status.success() {
+        bail!("wget failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    let feed: ReleaseFeed = serde_json::from_slice(&output.stdout)
+        .context("parsing kernel.org's release feed")?;
+    let release = feed
+        .releases
+        .into_iter()
+        .filter(|r| r.moniker == moniker && !r.iseol && r.source.is_some())
+        .max_by(|a, b| compare_versions(&a.version, &b.version))
+        .with_context(|| format!("no active \"{moniker}\" release found in kernel.org's feed"))?;
+    let source = release.source.expect("filtered to Some above");
+
+    println!("using kernel {} ({source})", release.version);
+
+    let mut cfg = Config::load(config_path)?;
+    cfg.kernel.version = release.version;
+    cfg.kernel.url = source;
+    cfg.save(config_path)?;
+
+    println!("wrote kernel.version/url to {}", config_path.display());
+    println!("if you already fetched a different version's sources, run `fetch --clean` to redo it");
+    Ok(())
+}
+
+/// Compares dotted version strings (e.g. "6.12.109") component-wise, as
+/// integers rather than lexicographically ("6.9" < "6.12").
+fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split(|c: char| !c.is_ascii_digit())
+            .filter(|p| !p.is_empty())
+            .map(|p| p.parse().unwrap_or(0))
+            .collect()
+    };
+    parse(a).cmp(&parse(b))
 }
 
 fn num_cpus() -> usize {
