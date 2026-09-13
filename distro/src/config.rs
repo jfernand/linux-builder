@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
-use builder_core::config::{ImageConfig, KernelConfig};
+use builder_core::config::{BusyboxConfig, ImageConfig, KernelConfig, UutilsConfig};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// `distro`'s own config shape. Deliberately does *not* reuse
 /// `builder_core::config::Config` wholesale — that struct requires a
 /// `[busybox]`/`[uutils]` section neither of which `distro` has any use
-/// for. `KernelConfig`/`ImageConfig` are reused directly since they're
-/// genuinely identical between the two distros.
+/// for (see `to_builder_core` below). `KernelConfig`/`ImageConfig` are
+/// reused directly since they're genuinely identical between the two
+/// distros.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
     pub kernel: KernelConfig,
@@ -54,8 +55,23 @@ impl Config {
         self.build_dir.join("rootfs")
     }
 
-    #[allow(dead_code)] // used once make_image/test_qemu/write_usb are wired up
     pub fn output_image(&self) -> PathBuf {
         self.build_dir.join("output.img")
+    }
+
+    /// Adapts to `builder_core::config::Config`, for calling the reused
+    /// generic stage functions (`build_kernel`, `make_image`, `test_qemu`,
+    /// `write_usb`) — none of which read the busybox/uutils sections, so
+    /// these are harmless placeholders rather than something `distro`'s
+    /// own config file needs to carry.
+    pub fn to_builder_core(&self) -> builder_core::config::Config {
+        builder_core::config::Config {
+            kernel: self.kernel.clone(),
+            busybox: BusyboxConfig { version: String::new(), url: String::new() },
+            uutils: UutilsConfig { git_url: String::new(), git_rev: String::new() },
+            image: self.image.clone(),
+            build_dir: self.build_dir.clone(),
+            networking: self.networking,
+        }
     }
 }

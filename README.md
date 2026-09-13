@@ -18,10 +18,11 @@ Three crates:
   `builder-core` unchanged), a Rust-first userland (`cargo`/`rustup` on the
   built system, uutils/coreutils, and a curated set of Rust CLI tools), and
   eventually a COSMIC desktop — built entirely from upstream source, not
-  bootstrapped off another distro's packages. Very early stage: only
-  `fetch` (kernel source) is implemented; every other subcommand reports
-  "not yet implemented." Config is `distro.toml`, separate from
-  `distroless.toml`.
+  bootstrapped off another distro's packages. Early stage: `fetch`,
+  `build-kernel`, `make-image`, `test-qemu`, `write-usb`, and `list-devices`
+  work today (reusing `builder-core` as-is); `build-toolchain`,
+  `build-userland`, and `assemble-rootfs` aren't implemented yet. Config is
+  `distro.toml`, separate from `distroless.toml`.
 
 ## Pipeline stages
 
