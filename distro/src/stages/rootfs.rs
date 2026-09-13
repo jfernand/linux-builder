@@ -1,10 +1,121 @@
 use crate::config::Config;
-use anyhow::{bail, Result};
+use crate::stages::userland::{
+    agetty_binary_path, init_binary_path, mount_binary_path, shadow_binary_path,
+    umount_binary_path, uutils_binary_path,
+};
+use anyhow::{Context, Result};
+use builder_core::stages::already_built;
+use std::fs;
+use std::os::unix::fs::{symlink, PermissionsExt};
+use std::path::Path;
 
-/// Assembles the root filesystem tree: init, a real `login`/`getty` (via
-/// shadow-utils/util-linux, not BusyBox's empty-password trick), and the
-/// built userland. Not yet implemented — see Phase 1 of the distro
-/// roadmap.
-pub fn assemble_rootfs(_cfg: &Config, _force: bool) -> Result<()> {
-    bail!("assemble-rootfs: not yet implemented (see Phase 1 of the distro roadmap)")
+/// Utilities exposed from the uutils multi-call binary. Not exhaustive,
+/// just enough for a usable minimal shell environment — same starting
+/// list `distroless` uses, since uutils supports the same applets
+/// regardless of target libc.
+const COREUTILS_APPLETS: &[&str] = &[
+    "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "echo", "pwd", "touch", "chmod", "chown",
+    "ln", "grep", "sed", "head", "tail", "sort", "uniq", "wc", "find", "env", "true", "false",
+    "test", "[", "df", "du", "date", "uname", "sleep", "kill", "ps",
+];
+
+/// Assembles the root filesystem tree: uutils/coreutils, bash, util-linux's
+/// `agetty`/`mount`/`umount`, shadow-utils' `login`/`passwd`, and our own
+/// `distro-init` as `/sbin/init`. `distro-init` mounts proc/sys/dev itself
+/// and supervises `agetty` on the console — no BusyBox-style
+/// `/etc/inittab`/`rcS` needed.
+pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
+    let root = cfg.rootfs_dir();
+
+    if already_built(&root.join("sbin/init"), force) {
+        println!("skip assemble-rootfs: {} already assembled", root.display());
+        return Ok(());
+    }
+
+    for dir in [
+        "bin", "sbin", "proc", "sys", "dev", "root", "etc", "var/log", "var/run",
+    ] {
+        fs::create_dir_all(root.join(dir)).with_context(|| format!("creating rootfs dir {dir}"))?;
+    }
+
+    install_coreutils(cfg, &root)?;
+    install_bash(cfg, &root)?;
+    install_util_linux(cfg, &root)?;
+    install_shadow(cfg, &root)?;
+    install_init(&root)?;
+    write_login_config(&root)?;
+
+    Ok(())
+}
+
+fn install_coreutils(cfg: &Config, root: &Path) -> Result<()> {
+    let src = uutils_binary_path(cfg);
+    let dest = root.join("bin/coreutils");
+    fs::copy(&src, &dest).with_context(|| format!("copying {} to {}", src.display(), dest.display()))?;
+
+    for applet in COREUTILS_APPLETS {
+        let link = root.join("bin").join(applet);
+        let _ = fs::remove_file(&link);
+        symlink("coreutils", &link).with_context(|| format!("symlinking bin/{applet} -> coreutils"))?;
+    }
+
+    Ok(())
+}
+
+fn install_bash(cfg: &Config, root: &Path) -> Result<()> {
+    let src = cfg.bash_build_dir().join("bash");
+    let dest = root.join("bin/bash");
+    fs::copy(&src, &dest).with_context(|| format!("copying {} to {}", src.display(), dest.display()))?;
+
+    let sh_link = root.join("bin/sh");
+    let _ = fs::remove_file(&sh_link);
+    symlink("bash", &sh_link).context("symlinking bin/sh -> bash")?;
+
+    Ok(())
+}
+
+fn install_util_linux(cfg: &Config, root: &Path) -> Result<()> {
+    copy_binary(&agetty_binary_path(cfg), &root.join("sbin/agetty"))?;
+    copy_binary(&mount_binary_path(cfg), &root.join("bin/mount"))?;
+    copy_binary(&umount_binary_path(cfg), &root.join("bin/umount"))?;
+    Ok(())
+}
+
+fn install_shadow(cfg: &Config, root: &Path) -> Result<()> {
+    copy_binary(&shadow_binary_path(cfg, "login"), &root.join("bin/login"))?;
+    copy_binary(&shadow_binary_path(cfg, "passwd"), &root.join("bin/passwd"))?;
+    Ok(())
+}
+
+fn install_init(root: &Path) -> Result<()> {
+    copy_binary(&init_binary_path(), &root.join("sbin/init"))
+}
+
+fn copy_binary(src: &Path, dest: &Path) -> Result<()> {
+    fs::copy(src, dest).with_context(|| format!("copying {} to {}", src.display(), dest.display()))?;
+    Ok(())
+}
+
+/// A single passwordless `root` account (empty field in `/etc/shadow` —
+/// `login` still prompts for a password, but accepts any input including
+/// none; run `passwd` once logged in to set a real one), plus the handful
+/// of files shadow-utils' `login` expects to exist (even if empty) so it
+/// doesn't warn about a missing login-record/database.
+fn write_login_config(root: &Path) -> Result<()> {
+    fs::write(root.join("etc/passwd"), "root:x:0:0:root:/root:/bin/bash\n")?;
+    fs::write(root.join("etc/group"), "root:x:0:\n")?;
+
+    let shadow_path = root.join("etc/shadow");
+    fs::write(&shadow_path, "root::19999:0:99999:7:::\n")?;
+    fs::set_permissions(&shadow_path, fs::Permissions::from_mode(0o600))?;
+
+    let gshadow_path = root.join("etc/gshadow");
+    fs::write(&gshadow_path, "root:::\n")?;
+    fs::set_permissions(&gshadow_path, fs::Permissions::from_mode(0o600))?;
+
+    for f in ["var/log/lastlog", "var/log/wtmp", "var/run/utmp"] {
+        fs::write(root.join(f), [])?;
+    }
+
+    Ok(())
 }
