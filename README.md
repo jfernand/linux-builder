@@ -172,6 +172,12 @@ cargo run -- test-qemu
 Configuration (kernel/BusyBox versions, image size, hostname, etc.) lives in
 `linux-builder.toml`.
 
+Boot lands on a `login:` prompt (BusyBox `getty`+`login` on both `tty1` and
+the serial console) for a single `root` account with **no password** — enter
+`root` and anything (or nothing) at the password prompt. Run `passwd` once
+logged in to set one before exposing this to a network, especially with
+`networking` on.
+
 ## Host requirements
 
 ```bash

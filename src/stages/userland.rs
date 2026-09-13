@@ -57,6 +57,14 @@ const BUSYBOX_APPLETS: &[&str] = &[
     "REBOOT",
     "POWEROFF",
     "HALT",
+    "GETTY",
+    "LOGIN",
+    "PASSWD",
+    // login's own crypt(3) call, not the system one: avoids pulling in
+    // glibc's <crypt.h> (via the musl-header-fallback below), which drags
+    // in glibc's <features.h>/<sys/cdefs.h> and conflicts with musl's.
+    "USE_BB_CRYPT",
+    "USE_BB_CRYPT_SHA",
 ];
 
 /// Only built when `networking` is enabled in the config (toggleable from

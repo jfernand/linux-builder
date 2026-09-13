@@ -23,7 +23,7 @@ pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    for dir in ["bin", "sbin", "etc", "proc", "sys", "dev", "lib", "usr/bin", "usr/sbin", "etc/init.d"] {
+    for dir in ["bin", "sbin", "etc", "proc", "sys", "dev", "lib", "usr/bin", "usr/sbin", "etc/init.d", "root"] {
         fs::create_dir_all(root.join(dir))
             .with_context(|| format!("creating rootfs dir {dir}"))?;
     }
@@ -62,11 +62,13 @@ fn install_coreutils(cfg: &Config, root: &Path) -> Result<()> {
 
 /// Busybox applets referenced by /etc/inittab and /etc/init.d/rcS
 /// (see BUSYBOX_APPLETS in build_busybox), exposed as /sbin/<name> symlinks.
-const BUSYBOX_SBIN_APPLETS: &[&str] = &["hostname", "reboot", "poweroff", "halt", "swapoff"];
+const BUSYBOX_SBIN_APPLETS: &[&str] = &["hostname", "reboot", "poweroff", "halt", "swapoff", "getty"];
 
 /// uutils/coreutils doesn't build a `mount`/`umount` applet under the
 /// `feat_os_unix_musl` feature set, so route these through busybox instead.
-const BUSYBOX_BIN_APPLETS: &[&str] = &["mount", "umount"];
+/// `login` lives here too since that's where `getty` looks for it by
+/// default (no `-l` override needed).
+const BUSYBOX_BIN_APPLETS: &[&str] = &["mount", "umount", "login", "passwd"];
 
 /// Only symlinked when `networking` is enabled (see BUSYBOX_NETWORKING_APPLETS
 /// in build_busybox, which is what actually compiles these applets in).
@@ -130,10 +132,22 @@ fn write_config_files(cfg: &Config, root: &Path) -> Result<()> {
         "proc  /proc  proc  defaults  0 0\nsysfs /sys   sysfs defaults  0 0\n",
     )?;
 
+    // A single root account with no password. BusyBox `login` only takes
+    // its no-password shortcut when /etc/passwd's own password field is
+    // empty (`pw->pw_passwd[0] == 0`); an "x" + a shadow entry routes
+    // through crypt() instead, which rejects an empty hash as a bad salt.
+    // So: no /etc/shadow, empty field directly in /etc/passwd. `login`
+    // still prompts for a password, but any input (including none) is
+    // accepted — you get a real login prompt without needing to bake in or
+    // remember a password. Set one (`passwd`, once logged in) before
+    // exposing this to a network.
+    fs::write(root.join("etc/passwd"), "root::0:0:root:/root:/bin/sh\n")?;
+
     fs::write(
         root.join("etc/inittab"),
         "::sysinit:/etc/init.d/rcS\n\
-         ::respawn:/bin/sh\n\
+         tty1::respawn:/sbin/getty 38400 tty1\n\
+         ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n\
          ::ctrlaltdel:/sbin/reboot\n\
          ::shutdown:/sbin/swapoff -a\n",
     )?;
