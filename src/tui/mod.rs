@@ -4,7 +4,7 @@ mod stage;
 use crate::stages::kernel::FEATURE_PACKS;
 use crate::stages::usb::Device;
 use anyhow::Result;
-use app::{settings_count, App, Screen, Status, FIXED_SETTINGS_COUNT};
+use app::{settings_rows, App, Screen, SettingsRow, Status};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, ExecutableCommand};
@@ -64,6 +64,12 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &
     }
 }
 
+/// Index of the first settings row matching `pred`, for returning to a
+/// specific row (e.g. Hostname) after a sub-screen closes.
+fn settings_row_index(pred: impl Fn(&SettingsRow) -> bool) -> usize {
+    settings_rows().iter().position(pred).unwrap_or(0)
+}
+
 fn handle_key(app: &mut App, code: KeyCode) {
     match &mut app.screen {
         Screen::Dashboard => match code {
@@ -107,12 +113,12 @@ fn handle_key(app: &mut App, code: KeyCode) {
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if *selected + 1 < settings_count() {
+                if *selected + 1 < settings_rows().len() {
                     *selected += 1;
                 }
             }
-            KeyCode::Enter | KeyCode::Char(' ') => match *selected {
-                0 => {
+            KeyCode::Enter | KeyCode::Char(' ') => match settings_rows()[*selected] {
+                SettingsRow::Networking => {
                     // Best-effort: if the config file can't be written (e.g.
                     // permissions), just leave the in-memory toggle reverted
                     // rather than surfacing a save error into a stage's log.
@@ -120,10 +126,10 @@ fn handle_key(app: &mut App, code: KeyCode) {
                         app.cfg.networking = !app.cfg.networking;
                     }
                 }
-                1 => app.force = !app.force,
-                2 => {} // Hostname: not a toggle, press `e` to edit
-                i => {
-                    let key = FEATURE_PACKS[i - FIXED_SETTINGS_COUNT].key;
+                SettingsRow::ForceRebuild => app.force = !app.force,
+                SettingsRow::Hostname | SettingsRow::CustomLogo => {} // press `e` to edit
+                SettingsRow::Feature(i) => {
+                    let key = FEATURE_PACKS[i].key;
                     if app.toggle_feature(key).is_err() {
                         // Best-effort revert, same as the networking toggle above.
                         if let Some(pos) = app.cfg.kernel.features.iter().position(|f| f == key) {
@@ -134,23 +140,68 @@ fn handle_key(app: &mut App, code: KeyCode) {
                     }
                 }
             },
-            KeyCode::Char('e') => {
-                if *selected == 2 {
+            KeyCode::Char('e') => match settings_rows()[*selected] {
+                SettingsRow::Hostname => {
                     app.screen = Screen::EditHostname { typed: app.cfg.image.hostname.clone() };
                 }
-            }
+                SettingsRow::CustomLogo => app.open_file_picker(),
+                _ => {}
+            },
             _ => {}
         },
         Screen::EditHostname { typed } => match code {
-            KeyCode::Esc => app.screen = Screen::Settings { selected: 2 },
+            KeyCode::Esc => {
+                app.screen = Screen::Settings {
+                    selected: settings_row_index(|r| matches!(r, SettingsRow::Hostname)),
+                }
+            }
             KeyCode::Backspace => {
                 typed.pop();
             }
             KeyCode::Char(c) => typed.push(c),
             KeyCode::Enter => {
                 let typed = typed.clone();
-                app.screen = Screen::Settings { selected: 2 };
+                app.screen = Screen::Settings {
+                    selected: settings_row_index(|r| matches!(r, SettingsRow::Hostname)),
+                };
                 let _ = app.set_hostname(&typed);
+            }
+            _ => {}
+        },
+        Screen::FilePicker { dir, entries, selected, .. } => match code {
+            KeyCode::Esc => {
+                app.screen = Screen::Settings {
+                    selected: settings_row_index(|r| matches!(r, SettingsRow::CustomLogo)),
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if *selected > 0 {
+                    *selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if *selected + 1 < entries.len() {
+                    *selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(entry) = entries.get(*selected) {
+                    if entry.name == ".." {
+                        if let Some(parent) = dir.parent() {
+                            let parent = parent.to_path_buf();
+                            app.navigate_picker(parent);
+                        }
+                    } else if entry.is_dir {
+                        let next = dir.join(&entry.name);
+                        app.navigate_picker(next);
+                    } else {
+                        let path = dir.join(&entry.name);
+                        app.screen = Screen::Settings {
+                            selected: settings_row_index(|r| matches!(r, SettingsRow::CustomLogo)),
+                        };
+                        let _ = app.set_logo_file(path);
+                    }
+                }
             }
             _ => {}
         },
@@ -227,6 +278,9 @@ fn draw(f: &mut Frame, app: &App) {
         Screen::ConfirmClean { idx } => draw_confirm_clean(f, size, STAGES[*idx].label()),
         Screen::Settings { selected } => draw_settings(f, size, app, *selected),
         Screen::EditHostname { typed } => draw_edit_text(f, size, "Hostname", typed),
+        Screen::FilePicker { dir, entries, selected, error } => {
+            draw_file_picker(f, size, dir, entries, *selected, error.as_deref())
+        }
         Screen::Dashboard => {}
     }
 }
@@ -341,32 +395,41 @@ fn draw_device_picker(f: &mut Frame, area: Rect, devices: &[Device], selected: u
 
 fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
     let popup = centered_rect(60, 30, area);
-    let mut rows: Vec<(String, bool, String)> = vec![
-        (
-            "Networking".to_string(),
-            app.cfg.networking,
-            "busybox udhcpc/ifconfig/route/ping, DHCP at boot, QEMU NIC".to_string(),
-        ),
-        (
-            "Force rebuild (this session)".to_string(),
-            app.force,
-            "pass --force to the next stage you run".to_string(),
-        ),
-        (
-            "Hostname".to_string(),
-            false,
-            format!("{} (e to change)", app.cfg.image.hostname),
-        ),
-    ];
-    for pack in FEATURE_PACKS {
-        rows.push((pack.label.to_string(), app.is_feature_enabled(pack.key), pack.description.to_string()));
-    }
-
-    let items: Vec<ListItem> = rows
+    let items: Vec<ListItem> = settings_rows()
         .iter()
         .enumerate()
-        .map(|(i, (label, on, desc))| {
-            let mark = if i == 2 { "   " } else if *on { "[x]" } else { "[ ]" };
+        .map(|(i, row)| {
+            let (mark, label, desc) = match row {
+                SettingsRow::Networking => (
+                    checkbox(app.cfg.networking),
+                    "Networking".to_string(),
+                    "busybox udhcpc/ifconfig/route/ping, DHCP at boot, QEMU NIC".to_string(),
+                ),
+                SettingsRow::ForceRebuild => (
+                    checkbox(app.force),
+                    "Force rebuild (this session)".to_string(),
+                    "pass --force to the next stage you run".to_string(),
+                ),
+                SettingsRow::Hostname => (
+                    "   ",
+                    "Hostname".to_string(),
+                    format!("{} (e to change)", app.cfg.image.hostname),
+                ),
+                SettingsRow::CustomLogo => (
+                    "   ",
+                    "  Custom logo file".to_string(),
+                    app.cfg
+                        .kernel
+                        .logo_file
+                        .as_ref()
+                        .map(|p| format!("{} (e to change)", p.display()))
+                        .unwrap_or_else(|| "stock penguin (e to pick a file)".to_string()),
+                ),
+                SettingsRow::Feature(idx) => {
+                    let pack = &FEATURE_PACKS[*idx];
+                    (checkbox(app.is_feature_enabled(pack.key)), pack.label.to_string(), pack.description.to_string())
+                }
+            };
             let style = if i == selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -383,6 +446,10 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
     );
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(list, popup);
+}
+
+fn checkbox(on: bool) -> &'static str {
+    if on { "[x]" } else { "[ ]" }
 }
 
 fn draw_confirm(f: &mut Frame, area: Rect, device: &Device, typed: &str) {
@@ -414,6 +481,40 @@ fn draw_edit_text(f: &mut Frame, area: Rect, label: &str, typed: &str) {
     let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Edit"));
     f.render_widget(ratatui::widgets::Clear, popup);
     f.render_widget(paragraph, popup);
+}
+
+fn draw_file_picker(
+    f: &mut Frame,
+    area: Rect,
+    dir: &std::path::Path,
+    entries: &[app::PickerEntry],
+    selected: usize,
+    error: Option<&str>,
+) {
+    let popup = centered_rect(70, 60, area);
+    let items: Vec<ListItem> = if let Some(error) = error {
+        vec![ListItem::new(error.to_string())]
+    } else if entries.is_empty() {
+        vec![ListItem::new("(empty directory)")]
+    } else {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let label = if entry.is_dir { format!("{}/", entry.name) } else { entry.name.clone() };
+                let style = if i == selected {
+                    Style::default().add_modifier(Modifier::REVERSED)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(Span::styled(label, style)))
+            })
+            .collect()
+    };
+    let title = format!("Pick a logo file: {} (enter: open/pick, esc: cancel)", dir.display());
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(ratatui::widgets::Clear, popup);
+    f.render_widget(list, popup);
 }
 
 fn draw_confirm_clean(f: &mut Frame, area: Rect, label: &str) {

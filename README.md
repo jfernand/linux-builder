@@ -96,6 +96,9 @@ features = ["boot-logo"]
 logo_file = "my-logo.ppm"
 ```
 
+or set it from the TUI: select "Custom logo file" (right under the "Boot
+logo" checkbox) on the settings screen and press `e` to browse for it.
+
 ## Interactive dashboard (TUI)
 
 ```bash
@@ -129,7 +132,10 @@ dashboard would hang).
 - One checkbox per kernel feature pack (see "Customizing the kernel config"
   below), persisted to `kernel.features` in `linux-builder.toml`. Off by
   default; toggling one only takes effect on the next `--force` run of
-  `build-kernel`.
+  `build-kernel`. **Custom logo file** sits right under the "Boot logo"
+  checkbox: press `e` to open a directory browser (arrows to navigate,
+  `Enter` on a folder to open it or `..` to go up, `Enter` on a `.ppm` file
+  to pick it) instead of typing a path.
 - **Hostname** is free text, not a checkbox: select it and press `e` to
   edit, `Enter` to save, `Esc` to cancel.
 

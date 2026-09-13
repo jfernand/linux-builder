@@ -5,7 +5,7 @@ use crate::stages::usb::Device;
 use anyhow::Result;
 use std::collections::VecDeque;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 
@@ -40,16 +40,38 @@ pub enum Screen {
     ConfirmClean { idx: usize },
     Settings { selected: usize },
     EditHostname { typed: String },
+    FilePicker { dir: PathBuf, entries: Vec<PickerEntry>, selected: usize, error: Option<String> },
 }
 
-/// Fixed settings toggles shown on the Screen::Settings overlay, before the
-/// dynamic list of kernel feature packs: Networking, Force rebuild, Hostname.
-pub const FIXED_SETTINGS_COUNT: usize = 3;
+pub struct PickerEntry {
+    pub name: String,
+    pub is_dir: bool,
+}
 
-/// Total rows on the Screen::Settings overlay: the fixed toggles plus one
-/// per entry in `FEATURE_PACKS`.
-pub fn settings_count() -> usize {
-    FIXED_SETTINGS_COUNT + FEATURE_PACKS.len()
+/// One row of the Screen::Settings overlay, in display order.
+#[derive(Clone, Copy)]
+pub enum SettingsRow {
+    Networking,
+    ForceRebuild,
+    Hostname,
+    /// Index into `FEATURE_PACKS`.
+    Feature(usize),
+    /// Shown directly under the `boot-logo` feature row.
+    CustomLogo,
+}
+
+/// The Screen::Settings overlay's rows, in display/selection order. Built
+/// fresh each time (cheap: FEATURE_PACKS is tiny) rather than cached, so
+/// there's one source of truth for row order, indices, and row count.
+pub fn settings_rows() -> Vec<SettingsRow> {
+    let mut rows = vec![SettingsRow::Networking, SettingsRow::ForceRebuild, SettingsRow::Hostname];
+    for (i, pack) in FEATURE_PACKS.iter().enumerate() {
+        rows.push(SettingsRow::Feature(i));
+        if pack.key == "boot-logo" {
+            rows.push(SettingsRow::CustomLogo);
+        }
+    }
+    rows
 }
 
 pub enum AppEvent {
@@ -108,6 +130,33 @@ impl App {
             features.push(key.to_string());
         }
         self.cfg.save(&self.config_path)
+    }
+
+    /// Sets `kernel.logo_file` and persists it.
+    pub fn set_logo_file(&mut self, path: PathBuf) -> Result<()> {
+        self.cfg.kernel.logo_file = Some(path);
+        self.cfg.save(&self.config_path)
+    }
+
+    /// Opens the file picker for choosing `kernel.logo_file`, starting in
+    /// the current logo file's directory if one is set, else the current
+    /// working directory.
+    pub fn open_file_picker(&mut self) {
+        let start_dir = self
+            .cfg
+            .kernel
+            .logo_file
+            .as_ref()
+            .and_then(|p| p.parent())
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.screen = read_dir_screen(start_dir);
+    }
+
+    /// Navigates the open file picker into `dir`.
+    pub fn navigate_picker(&mut self, dir: PathBuf) {
+        self.screen = read_dir_screen(dir);
     }
 
     /// Sets `image.hostname` and persists it. A blank value is ignored
@@ -229,6 +278,42 @@ impl App {
             let _ = tx.send(AppEvent::Done(idx, success));
         });
     }
+}
+
+/// Builds a `Screen::FilePicker` for `dir`, listing subdirectories and
+/// `.ppm` files (plus a `..` entry, unless `dir` has no parent).
+fn read_dir_screen(dir: PathBuf) -> Screen {
+    match list_dir(&dir) {
+        Ok(entries) => Screen::FilePicker { dir, entries, selected: 0, error: None },
+        Err(e) => Screen::FilePicker { dir, entries: vec![], selected: 0, error: Some(e.to_string()) },
+    }
+}
+
+fn list_dir(dir: &Path) -> Result<Vec<PickerEntry>> {
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            dirs.push(PickerEntry { name, is_dir: true });
+        } else if name.to_lowercase().ends_with(".ppm") {
+            files.push(PickerEntry { name, is_dir: false });
+        }
+    }
+    dirs.sort_by(|a, b| a.name.cmp(&b.name));
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut entries = Vec::new();
+    if dir.parent().is_some() {
+        entries.push(PickerEntry { name: "..".to_string(), is_dir: true });
+    }
+    entries.extend(dirs);
+    entries.extend(files);
+    Ok(entries)
 }
 
 /// Reads raw bytes and splits on '\r' or '\n', so progress output that
