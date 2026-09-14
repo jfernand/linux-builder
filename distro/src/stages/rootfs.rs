@@ -1,9 +1,8 @@
 use crate::config::Config;
-use crate::stages::userland::{
-    agetty_binary_path, init_binary_path, mount_binary_path, shadow_binary_path,
-    umount_binary_path, uutils_binary_path,
-};
+use crate::stages::buildpacks::{util_linux_buildpack, util_linux_ctx};
+use crate::stages::userland::{init_binary_path, shadow_binary_path, uutils_binary_path};
 use anyhow::{Context, Result};
+use buildpack_core::Buildpack;
 use builder_core::stages::{already_built, run_in};
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
@@ -101,50 +100,23 @@ fn install_bash(cfg: &Config, root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Delegates entirely to the `UtilLinux` buildpack's own `outputs()` —
+/// which already implements the `full`-vs-minimal branch (and, for
+/// `full`, the ELF-magic-byte scan of util-linux's build directory,
+/// since its autotools build places every program flat in the top level
+/// regardless of source subdir, alongside executable shell scripts like
+/// `configure` that aren't programs to ship). Built from `cfg.util_linux`
+/// directly, not a config-file re-read — see
+/// `stages::buildpacks::util_linux_buildpack`.
 fn install_util_linux(cfg: &Config, root: &Path) -> Result<()> {
-    if cfg.util_linux.full {
-        return install_util_linux_full(cfg, root);
-    }
+    let bp = util_linux_buildpack(cfg)?;
+    let ctx = util_linux_ctx(cfg);
 
-    copy_binary(&agetty_binary_path(cfg), &root.join("sbin/agetty"))?;
-    copy_binary(&mount_binary_path(cfg), &root.join("bin/mount"))?;
-    copy_binary(&umount_binary_path(cfg), &root.join("bin/umount"))?;
-    Ok(())
-}
-
-/// With `util_linux.full`, install every program the build produced (~121
-/// binaries: agetty/mount/umount plus lsblk, fdisk, blkid, findmnt, swapon,
-/// wipefs, ...) instead of just the three Phase 1 needs. util-linux's
-/// autotools build places every program flat in the top level of the build
-/// directory regardless of which source subdir (sys-utils/, disk-utils/,
-/// ...) it came from, so a non-recursive scan of that one directory finds
-/// them all. Filtered by ELF magic bytes rather than the executable bit
-/// alone, since that same top level also holds executable *shell scripts*
-/// (configure, config.status, libtool) that aren't programs to ship.
-fn install_util_linux_full(cfg: &Config, root: &Path) -> Result<()> {
-    let dir = cfg.util_linux_build_dir();
-    for entry in fs::read_dir(&dir).with_context(|| format!("reading dir {}", dir.display()))? {
-        let path = entry?.path();
-        if !path.is_file() || !is_executable(&path) || !is_elf(&path)? {
-            continue;
-        }
-
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        let dest_dir = if name == "agetty" { "sbin" } else { "bin" };
-        copy_binary(&path, &root.join(dest_dir).join(&name))?;
+    for out in bp.outputs(&ctx) {
+        let Some(install) = out.rootfs_install else { continue };
+        copy_binary(&out.path, &root.join(&install.dest))?;
     }
     Ok(())
-}
-
-fn is_executable(path: &Path) -> bool {
-    fs::metadata(path).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
-}
-
-fn is_elf(path: &Path) -> Result<bool> {
-    use std::io::Read;
-    let mut buf = [0u8; 4];
-    let mut f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    Ok(f.read(&mut buf)? == 4 && buf == *b"\x7fELF")
 }
 
 fn install_shadow(cfg: &Config, root: &Path) -> Result<()> {

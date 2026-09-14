@@ -3,6 +3,7 @@ mod config;
 mod stages;
 
 use anyhow::{bail, Result};
+use buildpack_core::Buildpack;
 use clap::Parser;
 use cli::{Cli, Command};
 use config::Config;
@@ -16,13 +17,14 @@ fn main() -> Result<()> {
         Command::Fetch => stages::fetch::fetch(&cfg, cli.force),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
         Command::ResolveKernel { channel } => stages::kernel::resolve_kernel(&cli.config, channel),
-        Command::BuildKernel => builder_core::stages::kernel::build_kernel(&cfg.to_builder_core(), cli.force),
+        Command::BuildKernel => build_kernel(&cli.config, &cfg, cli.force),
         Command::MenuConfig { save_to } => {
-            builder_core::stages::kernel::menuconfig(&cfg.to_builder_core(), &save_to)
+            let bp = stages::buildpacks::kernel_buildpack(&cli.config)?;
+            bp.menuconfig(&stages::buildpacks::kernel_ctx(&cfg), &save_to)
         }
         Command::BuildUserland => {
             stages::userland::build_userland(&cfg, cli.force)?;
-            stages::new_packages::build_new_packages(&cli.config, &cfg, cli.force)
+            stages::buildpacks::build_new_packages(&cli.config, &cfg, cli.force)
         }
         Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
         Command::MakeImage => builder_core::stages::image::make_image(&cfg.to_builder_core(), cli.force),
@@ -34,12 +36,17 @@ fn main() -> Result<()> {
     }
 }
 
+fn build_kernel(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
+    let bp = stages::buildpacks::kernel_buildpack(config_path)?;
+    bp.build(&stages::buildpacks::kernel_ctx(cfg), force)
+}
+
 fn run_all(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
     stages::fetch::fetch(cfg, force)?;
     stages::toolchain::build_toolchain()?;
-    builder_core::stages::kernel::build_kernel(&cfg.to_builder_core(), force)?;
+    build_kernel(config_path, cfg, force)?;
     stages::userland::build_userland(cfg, force)?;
-    stages::new_packages::build_new_packages(config_path, cfg, force)?;
+    stages::buildpacks::build_new_packages(config_path, cfg, force)?;
     stages::rootfs::assemble_rootfs(cfg, force)?;
     builder_core::stages::image::make_image(&cfg.to_builder_core(), force)?;
     println!("done. run `distro test-qemu` to boot the image in QEMU.");
@@ -47,7 +54,7 @@ fn run_all(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<(
 }
 
 fn list_features() -> Result<()> {
-    for pack in builder_core::stages::kernel::FEATURE_PACKS {
+    for pack in buildpacks::kernel::FEATURE_PACKS {
         println!("{:<10} {}", pack.key, pack.description);
     }
     Ok(())

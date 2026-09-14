@@ -21,7 +21,9 @@ fn cargo_target_dir(source_dir: &std::path::Path) -> std::path::PathBuf {
 pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_uutils(cfg, force)?;
     build_bash(cfg, force)?;
-    build_util_linux(cfg, force)?;
+    // util-linux builds via the buildpacks bridge now — see
+    // stages::buildpacks::build_new_packages, called from main.rs right
+    // after this function.
     build_shadow(cfg, force)?;
     build_seatd(cfg, force)?;
     build_dbus(cfg, force)?;
@@ -34,7 +36,7 @@ pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_libevdev(cfg, force)?;
     build_libinput(cfg, force)?;
     build_libdrm(cfg, force)?;
-    build_mesa(cfg, force)?;
+    // Mesa likewise — see stages::buildpacks::build_new_packages.
     build_init(force)?;
     Ok(())
 }
@@ -103,71 +105,6 @@ fn build_bash(cfg: &Config, force: bool) -> Result<()> {
 
     println!("building bash");
     run_in(&dir, Command::new("make").arg(format!("-j{}", num_cpus())))?;
-
-    Ok(())
-}
-
-fn build_util_linux(cfg: &Config, force: bool) -> Result<()> {
-    let dir = cfg.util_linux_build_dir();
-    let binary = dir.join("agetty");
-
-    if already_built(&binary, force) {
-        println!("skip build-util-linux: {} already exists", binary.display());
-        return Ok(());
-    }
-
-    let configure_args: Vec<&str> = if cfg.util_linux.full {
-        vec![
-            "--enable-all-programs",
-            // sqlite3's static .a isn't linked against -lm on this host,
-            // breaking lastlog2's static link; udev's static .a doesn't
-            // exist at all here (shared-only), breaking findmnt/lsblk;
-            // pylibmount is a shared-only libtool module, incompatible
-            // with --disable-shared; ncursesw/ncurses/slang's static libs
-            // have their own unrelated static-link gaps on this host,
-            // breaking cfdisk (and, as a side effect of no curses UI
-            // library at all, irqtop/ul/more/pg/setterm too) — all found
-            // by actually trying the full static build, not guessed at.
-            "--disable-liblastlog2",
-            "--without-udev",
-            "--without-python",
-            "--without-ncursesw",
-            "--without-ncurses",
-            "--without-slang",
-            "--disable-shared",
-            "--enable-static",
-        ]
-    } else {
-        vec![
-            "--disable-all-programs",
-            "--enable-agetty",
-            "--enable-mount",
-            "--enable-libmount",
-            "--enable-libblkid",
-            "--enable-libuuid",
-            "--disable-shared",
-            "--enable-static",
-        ]
-    };
-
-    println!(
-        "configuring util-linux (static, {}) in {}",
-        if cfg.util_linux.full { "full" } else { "agetty+mount only" },
-        dir.display()
-    );
-    run_in(&dir, Command::new("sh").arg("configure").args(configure_args))?;
-
-    println!("building util-linux");
-    run_in(
-        &dir,
-        // -all-static (libtool's "genuinely fully static executable" flag,
-        // unlike plain -static) has to be a `make`-time LDFLAGS, not a
-        // configure-time one: configure's own compiler sanity check calls
-        // gcc directly, before libtool is set up to translate the flag, so
-        // gcc itself rejects it as invalid ("C compiler cannot create
-        // executables") if it's set that early.
-        Command::new("make").arg(format!("-j{}", num_cpus())).arg("LDFLAGS=-all-static"),
-    )?;
 
     Ok(())
 }
@@ -674,52 +611,6 @@ fn build_libdrm(cfg: &Config, force: bool) -> Result<()> {
     )
 }
 
-/// Phase 3's graphics stack, scoped to QEMU's `virtio-gpu` first (per the
-/// project roadmap): only the `virgl` (hardware-accelerated, talks to
-/// QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback)
-/// gallium drivers, no LLVM (`llvmpipe` — the LLVM-based software
-/// rasterizer — isn't in the driver list, and nothing else needs LLVM
-/// either, answering the roadmap's own open question: this milestone does
-/// not need it), no Vulkan, no GLX/X11 (`platforms=wayland` only, matching
-/// the earlier decision not to build libxcb). `spirv-tools` and
-/// `lmsensors` are both explicitly disabled rather than left on `auto`:
-/// both would otherwise silently pick up unrelated *host* packages via
-/// pkg-config's default search path (this build host has a Homebrew
-/// `SPIRV-Tools` at a nonstandard prefix) that `PKG_CONFIG_SYSROOT_DIR`
-/// then mangles, since that host package was never installed under our
-/// sysroot — a real build failure this surfaced
-/// (`spirv-tools/libspirv.h: No such file or directory`) before being
-/// disabled outright, since neither is needed for this milestone anyway.
-fn build_mesa(cfg: &Config, force: bool) -> Result<()> {
-    let dir = cfg.mesa_build_dir();
-    let marker = dir.join("build").join("meson-private").join("gbm.pc");
-
-    if already_built(&marker, force) {
-        println!("skip build-mesa: {} already exists", marker.display());
-        return Ok(());
-    }
-
-    println!("configuring/building/installing mesa in {}", dir.display());
-    meson_build_and_install(
-        cfg,
-        &dir,
-        &[
-            "-Dplatforms=wayland",
-            "-Dgallium-drivers=virgl,softpipe",
-            "-Dvulkan-drivers=",
-            "-Dllvm=disabled",
-            "-Dglx=disabled",
-            "-Dgbm=enabled",
-            "-Degl=enabled",
-            "-Dopengl=true",
-            "-Dgles1=disabled",
-            "-Dgles2=enabled",
-            "-Dspirv-tools=disabled",
-            "-Dlmsensors=disabled",
-        ],
-    )
-}
-
 fn build_init(force: bool) -> Result<()> {
     let binary = init_binary_path();
     if already_built(&binary, force) {
@@ -755,18 +646,6 @@ pub fn init_binary_path() -> std::path::PathBuf {
 
 pub fn uutils_binary_path(cfg: &Config) -> std::path::PathBuf {
     cargo_target_dir(&cfg.uutils_build_dir()).join(GNU_TARGET).join("release").join("coreutils")
-}
-
-pub fn agetty_binary_path(cfg: &Config) -> std::path::PathBuf {
-    cfg.util_linux_build_dir().join("agetty")
-}
-
-pub fn mount_binary_path(cfg: &Config) -> std::path::PathBuf {
-    cfg.util_linux_build_dir().join("mount")
-}
-
-pub fn umount_binary_path(cfg: &Config) -> std::path::PathBuf {
-    cfg.util_linux_build_dir().join("umount")
 }
 
 pub fn shadow_binary_path(cfg: &Config, name: &str) -> std::path::PathBuf {
