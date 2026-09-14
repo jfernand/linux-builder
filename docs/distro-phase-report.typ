@@ -24,7 +24,7 @@
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: a new #cd[Buildpack] trait — 8 of 11 proven packages (the cairo chain) wired directly into `distro build-userland`; kernel/util-linux/Mesa's buildpack versions remain proof-of-concept only — see §8.5]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: a new #cd[Buildpack] trait — all 11 proven packages, including kernel/util-linux/Mesa cut over from the old pipeline, are now what `distro build-userland`/`build-kernel` actually call, one command for all 25 packages — see §8.5]),
     ("Not covered", [Phase 4 through Phase 6 — a Rust toolchain on-target, COSMIC itself, real GPU drivers beyond virtio-gpu, audio, networking UI — see §9]),
   ),
 )
@@ -766,21 +766,50 @@ Eleven packages are implemented and verified against the real
 kernel (its `FEATURE_PACKS`, §3.2, kept as its own internal mechanism
 rather than becoming buildpacks themselves — they have no source or
 build step of their own), util-linux, Mesa, and the seven-package cairo
-chain (including `xkeyboard-config`) above. Of those, the eight with no
-old-pipeline equivalent at all — the cairo chain plus `xkeyboard-config`
-— are now wired directly into `distro build-userland` (and `distro
-all`): `new_packages.rs` builds the same buildpack list `build_userland`
-does, in `topo_order`, right after the old pipeline's own packages. One
-command builds all 25 packages; no more separate `cargo run -p
-buildpacks --example weston_chain` step. This needed no rootfs-side
-wiring at all: `assemble-rootfs`'s existing `install_sysroot` (`cp -a`
-of the whole shared sysroot) already picks up whatever landed there,
+chain (including `xkeyboard-config`) above. *All eleven* are now what
+`distro`'s real CLI actually calls, not proof-of-concept duplicates
+sitting alongside working code: `stages/buildpacks.rs` builds the
+cairo-chain packages (no old-pipeline equivalent at all — pure
+addition) plus util-linux and Mesa (cut over — their old
+`distro/src/stages/userland.rs` implementations are deleted) in
+`topo_order`, right after the old pipeline's own remaining packages;
+`build-kernel`/`menu-config`/`list-features` call the kernel buildpack
+directly, its old `builder_core`-wrapper calls removed too. One command
+(`distro build-userland`, or `distro all`) builds all 25 packages —
+including the once-separate `cargo run -p buildpacks --example
+weston_chain` step, now gone entirely.
+
+Cutting kernel/util-linux/Mesa over needed one real design fix:
+`topo_order` used to hard-error on any declared dependency id not
+present in the registry it was given, but Mesa's *real* dependencies
+(libdrm, wayland, libxkbcommon, pixman, `libdisplay_info`, libinput)
+aren't buildpacks yet — building a deliberate subset of a larger
+pipeline is the normal case, not a registration bug, so an unregistered
+dependency id is now silently treated as already-satisfied rather than
+an error. It also needed each of the three cutover packages to get its
+own `BuildCtx` pointed at its OLD on-disk build location
+(`build_dir/kernel`, `build_dir/util-linux`, `build_dir/mesa` — not the
+shared `build_dir/sources` every other buildpack uses), so the
+already-built kernel/util-linux/Mesa trees already on disk were
+recognized as-is instead of the cutover triggering a redundant rebuild
+— a kernel rebuild in particular being far too expensive to redo
+needlessly. Verified: every one of the 25 packages reports "already
+exists" on a rebuild, zero wasted work, and a full QEMU regression
+boot (login, `dbus-send`, `udevadm`) still passes exactly as before
+the cutover. This needed no rootfs-side wiring for the cairo chain at
+all: `assemble-rootfs`'s existing `install_sysroot` (`cp -a` of the
+whole shared sysroot) already picks up whatever landed there,
 regardless of which code built it — exactly how Weston ended up
-actually running inside QEMU (§7.1). Kernel/util-linux/Mesa's buildpack
-versions remain proof-of-concept only — `distro`'s real CLI still uses
-their old `distro/src/stages/{kernel,userland}.rs` implementations —
-since a full cutover would mean replacing rather than adding to working
-code, deferred along with the remaining ~16 packages.
+actually running inside QEMU (§7.1). util-linux, being a
+`StaticArtifacts` package, *did* need `rootfs.rs`'s
+`install_util_linux` rewritten to call the buildpack's own
+`outputs()` instead of duplicating the full/minimal branch and
+ELF-scan logic locally — now one implementation, not two.
+
+The remaining ~16 packages (bash, shadow, seatd, dbus, eudev, wayland,
+wayland-protocols, libxkbcommon, pixman, libdisplay-info, libevdev,
+libinput, libdrm, uutils, plus `distroless`'s own busybox) stay on the
+old pipeline for now, migrating on their own schedule.
 
 #callout(kind: "trap", "A regression from trying to fix a bug class, not an instance")[
   `sysroot_env` briefly set `PKG_CONFIG_LIBDIR` (which replaces
