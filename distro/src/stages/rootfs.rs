@@ -11,12 +11,26 @@ use std::path::Path;
 use std::process::Command;
 
 /// Host system libraries our dynamically-linked binaries (dbus, seatd,
-/// libinput, ...) need at runtime but that our own build doesn't produce
-/// — copied straight from the host, since we compile natively against
-/// the host's own glibc (see the config.rs/userland.rs comments on "we
-/// are the distro" via the host toolchain, not a cross one). Extend this
-/// list as later phases (Mesa, ...) pull in more of them.
-const HOST_DYNAMIC_LIBS: &[&str] = &["libc.so.6", "libexpat.so.1", "libm.so.6"];
+/// libinput, Mesa, ...) need at runtime but that our own build doesn't
+/// produce — copied straight from the host, since we compile natively
+/// against the host's own glibc (see the config.rs/userland.rs comments on
+/// "we are the distro" via the host toolchain, not a cross one).
+/// `libgcc_s`/`libstdc++` come from Mesa's C++ gallium code, `libz`/
+/// `libzstd` from its compression use, `libffi` from libwayland-client's
+/// wire-marshalling — the last of these was actually a latent Phase 2 gap
+/// (libwayland-client has needed it since it was first built), just never
+/// caught because nothing exercised it at runtime until Mesa's EGL now
+/// links against it too. Extend this list as later phases pull in more.
+const HOST_DYNAMIC_LIBS: &[&str] = &[
+    "libc.so.6",
+    "libexpat.so.1",
+    "libm.so.6",
+    "libgcc_s.so.1",
+    "libstdc++.so.6",
+    "libz.so.1",
+    "libzstd.so.1",
+    "libffi.so.8",
+];
 const HOST_LIB_DIR: &str = "/lib/x86_64-linux-gnu";
 const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";
 
