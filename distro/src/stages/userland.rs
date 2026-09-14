@@ -116,10 +116,29 @@ fn build_util_linux(cfg: &Config, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("configuring util-linux (static, agetty+mount only) in {}", dir.display());
-    run_in(
-        &dir,
-        Command::new("sh").arg("configure").args([
+    let configure_args: Vec<&str> = if cfg.util_linux.full {
+        vec![
+            "--enable-all-programs",
+            // sqlite3's static .a isn't linked against -lm on this host,
+            // breaking lastlog2's static link; udev's static .a doesn't
+            // exist at all here (shared-only), breaking findmnt/lsblk;
+            // pylibmount is a shared-only libtool module, incompatible
+            // with --disable-shared; ncursesw/ncurses/slang's static libs
+            // have their own unrelated static-link gaps on this host,
+            // breaking cfdisk (and, as a side effect of no curses UI
+            // library at all, irqtop/ul/more/pg/setterm too) — all found
+            // by actually trying the full static build, not guessed at.
+            "--disable-liblastlog2",
+            "--without-udev",
+            "--without-python",
+            "--without-ncursesw",
+            "--without-ncurses",
+            "--without-slang",
+            "--disable-shared",
+            "--enable-static",
+        ]
+    } else {
+        vec![
             "--disable-all-programs",
             "--enable-agetty",
             "--enable-mount",
@@ -128,8 +147,15 @@ fn build_util_linux(cfg: &Config, force: bool) -> Result<()> {
             "--enable-libuuid",
             "--disable-shared",
             "--enable-static",
-        ]),
-    )?;
+        ]
+    };
+
+    println!(
+        "configuring util-linux (static, {}) in {}",
+        if cfg.util_linux.full { "full" } else { "agetty+mount only" },
+        dir.display()
+    );
+    run_in(&dir, Command::new("sh").arg("configure").args(configure_args))?;
 
     println!("building util-linux");
     run_in(
