@@ -24,7 +24,7 @@
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: a new #cd[Buildpack] trait, proven against 11 packages but not yet wired into #cd[distro]'s own CLI — see §8.5]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: a new #cd[Buildpack] trait — 8 of 11 proven packages (the cairo chain) wired directly into `distro build-userland`; kernel/util-linux/Mesa's buildpack versions remain proof-of-concept only — see §8.5]),
     ("Not covered", [Phase 4 through Phase 6 — a Rust toolchain on-target, COSMIC itself, real GPU drivers beyond virtio-gpu, audio, networking UI — see §9]),
   ),
 )
@@ -766,18 +766,21 @@ Eleven packages are implemented and verified against the real
 kernel (its `FEATURE_PACKS`, §3.2, kept as its own internal mechanism
 rather than becoming buildpacks themselves — they have no source or
 build step of their own), util-linux, Mesa, and the seven-package cairo
-chain (including `xkeyboard-config`) above. None of it is wired into
-`distro`'s real CLI yet — every package above still builds through the
-pipeline this section describes, unchanged, and the new buildpacks were
-built through a standalone verification runner (`cargo run -p
-buildpacks --example weston_chain`) that targets the same real sysroot.
-This turned out to need no rootfs-side wiring either: `assemble-rootfs`
-picked up Weston, `weston-simple-egl`, and everything under them
-automatically, with zero code changes, because they install into the
-same shared sysroot `install_sysroot`'s `cp -a` already bulk-copies —
-which is exactly how they ended up actually running inside QEMU (§7.1)
-without a CLI cutover. Nothing gets built twice when the remaining ~16
-packages eventually migrate too.
+chain (including `xkeyboard-config`) above. Of those, the eight with no
+old-pipeline equivalent at all — the cairo chain plus `xkeyboard-config`
+— are now wired directly into `distro build-userland` (and `distro
+all`): `new_packages.rs` builds the same buildpack list `build_userland`
+does, in `topo_order`, right after the old pipeline's own packages. One
+command builds all 25 packages; no more separate `cargo run -p
+buildpacks --example weston_chain` step. This needed no rootfs-side
+wiring at all: `assemble-rootfs`'s existing `install_sysroot` (`cp -a`
+of the whole shared sysroot) already picks up whatever landed there,
+regardless of which code built it — exactly how Weston ended up
+actually running inside QEMU (§7.1). Kernel/util-linux/Mesa's buildpack
+versions remain proof-of-concept only — `distro`'s real CLI still uses
+their old `distro/src/stages/{kernel,userland}.rs` implementations —
+since a full cutover would mean replacing rather than adding to working
+code, deferred along with the remaining ~16 packages.
 
 #callout(kind: "trap", "A regression from trying to fix a bug class, not an instance")[
   `sysroot_env` briefly set `PKG_CONFIG_LIBDIR` (which replaces
