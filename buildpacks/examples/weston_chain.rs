@@ -57,10 +57,6 @@ fn main() -> Result<()> {
         order.iter().map(|&i| packs[i].id()).collect::<Vec<_>>()
     );
 
-    let svg_path = PathBuf::from("build-distro/dependency-graph.svg");
-    buildpack_core::graph::write_svg(&packs, &svg_path)?;
-    println!("wrote dependency graph to {}", svg_path.display());
-
     let ctx = BuildCtx {
         sources_dir: PathBuf::from("build-distro/sources"),
         build_dir: PathBuf::from("build-distro"),
@@ -70,6 +66,10 @@ fn main() -> Result<()> {
         networking: false,
         jobs: jobs(),
     };
+
+    let svg_path = PathBuf::from("build-distro/dependency-graph.svg");
+    buildpack_core::graph::write_svg(&packs, |_id| ctx.clone(), &svg_path)?;
+    println!("wrote dependency graph to {}", svg_path.display());
 
     for &i in &order {
         let pack = &packs[i];

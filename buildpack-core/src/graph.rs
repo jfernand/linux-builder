@@ -2,7 +2,7 @@
 //! algorithm) over each buildpack's declared `dependencies()`, replacing
 //! today's hand-maintained sequential call order.
 
-use crate::Buildpack;
+use crate::{BuildCtx, Buildpack};
 use anyhow::{bail, Context, Result};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -64,10 +64,26 @@ pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
 /// Renders `packs`' dependency graph as Graphviz DOT source — an edge per
 /// declared `dependencies()` entry, pointing from prerequisite to
 /// dependent (the same direction `topo_order` builds its adjacency in).
-pub fn to_dot(packs: &[Box<dyn Buildpack>]) -> String {
-    let mut dot = String::from("digraph buildpacks {\n    rankdir=LR;\n    node [shape=box];\n");
+/// `ctx_for` resolves each buildpack's `BuildCtx` (needed to call
+/// `outputs()`, which some buildpacks — e.g. util-linux in `full` mode —
+/// compute by scanning a build directory that may not exist yet; those
+/// safely return an empty list rather than erroring). Any buildpack with
+/// more than one declared output gets each one listed in its node label
+/// (e.g. `shadow`'s `login`/`passwd`, `weston`'s compositor binary +
+/// `.pc` marker) — with only one output, the id alone is enough.
+pub fn to_dot(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx) -> String {
+    let mut dot =
+        String::from("digraph buildpacks {\n    rankdir=LR;\n    node [shape=box, fontname=\"monospace\"];\n");
     for pack in packs {
-        dot.push_str(&format!("    \"{}\";\n", pack.id()));
+        let outputs = pack.outputs(&ctx_for(pack.id()));
+        let label = if outputs.len() > 1 {
+            let mut lines = vec![pack.id().to_string()];
+            lines.extend(outputs.iter().map(|o| format!("  {}", o.description)));
+            lines.join("\\l") + "\\l"
+        } else {
+            pack.id().to_string()
+        };
+        dot.push_str(&format!("    \"{}\" [label=\"{label}\"];\n", pack.id()));
         for dep in pack.dependencies() {
             dot.push_str(&format!("    \"{}\" -> \"{}\";\n", dep, pack.id()));
         }
@@ -79,10 +95,11 @@ pub fn to_dot(packs: &[Box<dyn Buildpack>]) -> String {
 /// Writes `packs`' dependency graph as an SVG to `path`, via the `dot`
 /// command (graphviz). Meant to be called on every real build run, not
 /// just on request — a standing, always-current picture of what depends
-/// on what, since `dependencies()` is the only place that graph is
-/// declared today (no separate diagram to keep in sync by hand).
-pub fn write_svg(packs: &[Box<dyn Buildpack>], path: &Path) -> Result<()> {
-    let dot = to_dot(packs);
+/// on what and what each package produces, since `dependencies()`/
+/// `outputs()` are the only places that information is declared today (no
+/// separate diagram to keep in sync by hand).
+pub fn write_svg(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx, path: &Path) -> Result<()> {
+    let dot = to_dot(packs, ctx_for);
     let output = Command::new("dot")
         .args(["-Tsvg"])
         .arg("-o")

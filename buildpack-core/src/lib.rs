@@ -6,6 +6,7 @@
 
 pub mod build;
 pub mod graph;
+pub mod install;
 pub mod run;
 
 use anyhow::Result;
@@ -61,7 +62,7 @@ pub struct RootfsInstall {
 /// `*_binary_path()` free functions and marker-path convention with one
 /// declared, inspectable list.
 pub struct BuildOutput {
-    pub description: &'static str,
+    pub description: String,
     pub path: PathBuf,
     pub rootfs_install: Option<RootfsInstall>,
 }
@@ -78,6 +79,7 @@ pub struct Description {
 /// Generic pipeline paths every buildpack needs. Deliberately NOT the
 /// whole distro `Config` — a buildpack only ever needs these plus its own
 /// already-`configure()`d fields, never another buildpack's config.
+#[derive(Clone)]
 pub struct BuildCtx {
     pub sources_dir: PathBuf,
     pub build_dir: PathBuf,

@@ -52,7 +52,20 @@ fn main() -> Result<()> {
         "[topo_order] ok: {:?}",
         order.iter().map(|&i| packs[i].id()).collect::<Vec<_>>()
     );
-    buildpack_core::graph::write_svg(&packs, &PathBuf::from("build-distro/dependency-graph.svg"))?;
+    let placeholder_ctx = BuildCtx {
+        sources_dir: PathBuf::from("build-distro/sources"),
+        build_dir: PathBuf::from("build-distro"),
+        sysroot_dir: PathBuf::from("build-distro/sysroot"),
+        rootfs_dir: PathBuf::from("build-distro/rootfs"),
+        arch: "x86_64".into(),
+        networking: false,
+        jobs: 1,
+    };
+    buildpack_core::graph::write_svg(
+        &packs,
+        |_id| placeholder_ctx.clone(),
+        &PathBuf::from("build-distro/dependency-graph.svg"),
+    )?;
 
     // --- 2. UtilLinux: full fresh fetch+build into a scratch dir --------
     let scratch = PathBuf::from("/tmp/buildpack-verify");

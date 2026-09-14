@@ -26,7 +26,7 @@
 
 use crate::config::Config;
 use anyhow::{Context, Result};
-use buildpack_core::{BuildCtx, BuildOutput, Buildpack, InstallMode};
+use buildpack_core::{BuildCtx, Buildpack, InstallMode};
 use buildpacks::bash::Bash;
 use buildpacks::cairo::Cairo;
 use buildpacks::dbus::Dbus;
@@ -184,7 +184,7 @@ pub fn build_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Resu
     let order = buildpack_core::graph::topo_order(&packs)?;
 
     let svg_path = cfg.build_dir.join("dependency-graph.svg");
-    if let Err(e) = buildpack_core::graph::write_svg(&packs, &svg_path) {
+    if let Err(e) = buildpack_core::graph::write_svg(&packs, |id| ctx_for(id, cfg), &svg_path) {
         println!("warning: couldn't write dependency graph SVG: {e}");
     } else {
         println!("wrote dependency graph to {}", svg_path.display());
@@ -217,26 +217,8 @@ pub fn install_static_outputs(config_path: &Path, cfg: &Config, root: &Path) -> 
         }
         let ctx = ctx_for(pack.id(), cfg);
         for out in pack.outputs(&ctx) {
-            install_output(root, &out)?;
+            buildpack_core::install::install_output(root, &out)?;
         }
-    }
-
-    Ok(())
-}
-
-fn install_output(root: &Path, out: &BuildOutput) -> Result<()> {
-    let Some(install) = &out.rootfs_install else { return Ok(()) };
-
-    let dest = root.join(&install.dest);
-    std::fs::copy(&out.path, &dest)
-        .with_context(|| format!("copying {} to {}", out.path.display(), dest.display()))?;
-
-    let target_name = install.dest.file_name().context("output dest has no file name")?;
-    for link in &install.symlinks {
-        let link_path = root.join(link);
-        let _ = std::fs::remove_file(&link_path);
-        std::os::unix::fs::symlink(target_name, &link_path)
-            .with_context(|| format!("symlinking {}", link_path.display()))?;
     }
 
     Ok(())
