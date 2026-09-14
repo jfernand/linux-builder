@@ -9,7 +9,7 @@ use buildpack_core::run::{already_built, run_in};
 use buildpack_core::{
     BuildCtx, BuildOutput, Buildpack, Description, InstallMode, RootfsInstall, Source,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
 use std::process::Command;
@@ -65,7 +65,7 @@ const NETWORKING_BIN_APPLETS: &[&str] = &["udhcpc", "ifconfig", "route", "ping"]
 /// shadow musl's own headers.
 const MUSL_CC: &str = "musl-gcc -idirafter /usr/include -idirafter /usr/include/x86_64-linux-gnu";
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct BusyboxConfig {
     pub version: String,
     pub url: String,
@@ -94,6 +94,10 @@ impl Buildpack for Busybox {
     fn configure(&mut self, table: &toml::Value) -> anyhow::Result<()> {
         self.cfg = table.clone().try_into().context("parsing [busybox] config")?;
         Ok(())
+    }
+
+    fn to_toml(&self) -> anyhow::Result<toml::Value> {
+        toml::Value::try_from(&self.cfg).context("serializing [busybox] config")
     }
 
     fn dependencies(&self) -> &'static [&'static str] {

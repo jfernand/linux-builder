@@ -7,7 +7,7 @@ use buildpack_core::run::already_built;
 use buildpack_core::{
     BuildCtx, BuildOutput, Buildpack, Description, InstallMode, RootfsInstall, Source, SourcePatch,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 
@@ -39,7 +39,7 @@ pub enum UutilsVariant {
     Musl,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct UutilsConfig {
     pub git_url: String,
     pub git_rev: String,
@@ -88,6 +88,10 @@ impl Buildpack for Uutils {
     fn configure(&mut self, table: &toml::Value) -> Result<()> {
         self.cfg = table.clone().try_into().context("parsing [uutils] config")?;
         Ok(())
+    }
+
+    fn to_toml(&self) -> Result<toml::Value> {
+        toml::Value::try_from(&self.cfg).context("serializing [uutils] config")
     }
 
     fn dependencies(&self) -> &'static [&'static str] {

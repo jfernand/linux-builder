@@ -36,6 +36,10 @@ impl Buildpack for DistroInit {
         Ok(())
     }
 
+    fn to_toml(&self) -> anyhow::Result<toml::Value> {
+        Ok(toml::Value::Table(Default::default()))
+    }
+
     fn dependencies(&self) -> &'static [&'static str] {
         &[]
     }

@@ -7,11 +7,11 @@ use anyhow::Context;
 use buildpack_core::build::meson_build_and_install;
 use buildpack_core::run::already_built;
 use buildpack_core::{BuildCtx, BuildOutput, Buildpack, Description, InstallMode, Source};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WaylandProtocolsConfig {
     pub version: String,
     pub url: String,
@@ -40,6 +40,10 @@ impl Buildpack for WaylandProtocols {
     fn configure(&mut self, table: &toml::Value) -> anyhow::Result<()> {
         self.cfg = table.clone().try_into().context("parsing [wayland_protocols] config")?;
         Ok(())
+    }
+
+    fn to_toml(&self) -> anyhow::Result<toml::Value> {
+        toml::Value::try_from(&self.cfg).context("serializing [wayland_protocols] config")
     }
 
     fn dependencies(&self) -> &'static [&'static str] {

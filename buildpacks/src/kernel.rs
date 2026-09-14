@@ -8,12 +8,13 @@ use anyhow::{bail, Context, Result};
 use buildpack_core::{
     run::run_in, BuildCtx, BuildOutput, Buildpack, Description, InstallMode, Source,
 };
-use serde::Deserialize;
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct KernelConfig {
     pub version: String,
     pub url: String,
@@ -138,6 +139,10 @@ impl Buildpack for Kernel {
     fn configure(&mut self, table: &toml::Value) -> Result<()> {
         self.cfg = table.clone().try_into().context("parsing [kernel] config")?;
         Ok(())
+    }
+
+    fn to_toml(&self) -> Result<toml::Value> {
+        toml::Value::try_from(&self.cfg).context("serializing [kernel] config")
     }
 
     fn dependencies(&self) -> &'static [&'static str] {
@@ -464,9 +469,11 @@ pub fn latest_release(channel: KernelChannel) -> Result<(String, String)> {
     Ok((release.version, source))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ValueEnum)]
 pub enum KernelChannel {
+    /// The current mainline stable release
     Stable,
+    /// The newest maintained long-term-support branch
     Lts,
 }
 

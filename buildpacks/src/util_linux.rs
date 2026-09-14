@@ -8,13 +8,13 @@ use anyhow::{Context, Result};
 use buildpack_core::build::autotools_build_static;
 use buildpack_core::run::already_built;
 use buildpack_core::{BuildCtx, BuildOutput, Buildpack, Description, InstallMode, RootfsInstall, Source};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct UtilLinuxConfig {
     pub version: String,
     pub url: String,
@@ -51,6 +51,10 @@ impl Buildpack for UtilLinux {
     fn configure(&mut self, table: &toml::Value) -> Result<()> {
         self.cfg = table.clone().try_into().context("parsing [util_linux] config")?;
         Ok(())
+    }
+
+    fn to_toml(&self) -> Result<toml::Value> {
+        toml::Value::try_from(&self.cfg).context("serializing [util_linux] config")
     }
 
     fn dependencies(&self) -> &'static [&'static str] {

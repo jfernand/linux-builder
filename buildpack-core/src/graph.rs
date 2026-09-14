@@ -138,6 +138,9 @@ mod tests {
         fn configure(&mut self, _table: &toml::Value) -> Result<()> {
             Ok(())
         }
+        fn to_toml(&self) -> Result<toml::Value> {
+            Ok(toml::Value::Table(Default::default()))
+        }
         fn dependencies(&self) -> &'static [&'static str] {
             self.deps
         }

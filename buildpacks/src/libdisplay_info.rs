@@ -7,11 +7,11 @@ use buildpack_core::run::already_built;
 use buildpack_core::{
     BuildCtx, BuildOutput, Buildpack, Description, InstallMode, Source, SourcePatch,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct LibdisplayInfoConfig {
     pub version: String,
     pub url: String,
@@ -40,6 +40,10 @@ impl Buildpack for LibdisplayInfo {
     fn configure(&mut self, table: &toml::Value) -> Result<()> {
         self.cfg = table.clone().try_into().context("parsing [libdisplay_info] config")?;
         Ok(())
+    }
+
+    fn to_toml(&self) -> Result<toml::Value> {
+        toml::Value::try_from(&self.cfg).context("serializing [libdisplay_info] config")
     }
 
     fn dependencies(&self) -> &'static [&'static str] {

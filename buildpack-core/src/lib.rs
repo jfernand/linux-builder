@@ -5,6 +5,7 @@
 //! pipeline inside out") for the rationale.
 
 pub mod build;
+pub mod config;
 pub mod graph;
 pub mod install;
 pub mod run;
@@ -79,6 +80,9 @@ pub struct Description {
 /// Generic pipeline paths every buildpack needs. Deliberately NOT the
 /// whole distro `Config` — a buildpack only ever needs these plus its own
 /// already-`configure()`d fields, never another buildpack's config.
+/// `image` is only read by the 4 `PipelineStage` impls (`pipeline`
+/// module) — every `Buildpack` ignores it, the same way static-artifact
+/// packages already ignore `sysroot_dir`.
 #[derive(Clone)]
 pub struct BuildCtx {
     pub sources_dir: PathBuf,
@@ -88,6 +92,7 @@ pub struct BuildCtx {
     pub arch: String,
     pub networking: bool,
     pub jobs: usize,
+    pub image: config::ImageSettings,
 }
 
 pub trait Buildpack {
@@ -98,6 +103,11 @@ pub trait Buildpack {
     /// table, or an empty table if absent — packages with no config
     /// simply ignore it). Called once, right after construction.
     fn configure(&mut self, table: &toml::Value) -> Result<()>;
+
+    /// The inverse of `configure`: reassemble this buildpack's `[<id>]`
+    /// table, so `DistroConfig::save` can round-trip whatever
+    /// `configure`/direct field mutation (e.g. `resolve_kernel`) changed.
+    fn to_toml(&self) -> Result<toml::Value>;
 
     /// Declared prerequisite buildpack ids. Static and config-independent
     /// — dependencies don't change based on TOML overrides in this
