@@ -56,6 +56,9 @@ pub enum Command {
     },
     /// List removable disks that look like USB sticks
     ListDevices,
+    /// List named kernel feature packs that can be enabled via
+    /// `kernel.features` in the config file
+    ListFeatures,
     /// Write the built image to a removable device (DESTRUCTIVE)
     WriteUsb {
         /// Target device, e.g. /dev/sdb (must be a whole disk, not a partition)

@@ -25,6 +25,7 @@ fn main() -> Result<()> {
         Command::MakeImage => builder_core::stages::image::make_image(&cfg.to_builder_core(), cli.force),
         Command::TestQemu { window } => builder_core::stages::qemu::test_qemu(&cfg.to_builder_core(), window),
         Command::ListDevices => list_devices(),
+        Command::ListFeatures => list_features(),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
         Command::All => run_all(&cfg, cli.force),
     }
@@ -38,6 +39,13 @@ fn run_all(cfg: &Config, force: bool) -> Result<()> {
     stages::rootfs::assemble_rootfs(cfg, force)?;
     builder_core::stages::image::make_image(&cfg.to_builder_core(), force)?;
     println!("done. run `distro test-qemu` to boot the image in QEMU.");
+    Ok(())
+}
+
+fn list_features() -> Result<()> {
+    for pack in builder_core::stages::kernel::FEATURE_PACKS {
+        println!("{:<10} {}", pack.key, pack.description);
+    }
     Ok(())
 }
 
