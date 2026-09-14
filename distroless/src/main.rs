@@ -1,9 +1,12 @@
 mod cli;
+mod pipeline;
+mod rootfs;
 mod tui;
 
 use anyhow::{bail, Result};
 use builder_core::config::Config;
 use builder_core::stages;
+use buildpack_core::Buildpack;
 use clap::Parser;
 use cli::{Cli, Command};
 use std::io::Write;
@@ -13,36 +16,55 @@ fn main() -> Result<()> {
     let cfg = Config::load(&cli.config)?;
 
     match cli.command {
-        Command::Fetch { clean } => stages::fetch::fetch(&cfg, cli.force, clean),
+        Command::Fetch { clean: _ } => fetch(&cli.config, &cfg, cli.force),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
         Command::ResolveKernel { channel } => stages::kernel::resolve_kernel(&cli.config, channel),
-        Command::BuildKernel => stages::kernel::build_kernel(&cfg, cli.force),
-        Command::MenuConfig { save_to } => stages::kernel::menuconfig(&cfg, &save_to),
-        Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
-        Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
+        Command::BuildKernel => build_kernel(&cli.config, &cfg, cli.force),
+        Command::MenuConfig { save_to } => {
+            let bp = pipeline::kernel_buildpack(&cli.config)?;
+            bp.menuconfig(&pipeline::kernel_ctx(&cfg), &save_to)
+        }
+        Command::BuildUserland => pipeline::build_new_packages(&cli.config, &cfg, cli.force),
+        Command::AssembleRootfs => rootfs::assemble_rootfs(&cli.config, &cfg, cli.force),
         Command::MakeImage => stages::image::make_image(&cfg, cli.force),
         Command::TestQemu { window } => stages::qemu::test_qemu(&cfg, window),
         Command::ListDevices => list_devices(),
         Command::ListFeatures => list_features(),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
-        Command::All => run_all(&cfg, cli.force),
+        Command::All => run_all(&cli.config, &cfg, cli.force),
         Command::Tui => tui::run(cli.config.clone()),
     }
 }
 
-fn run_all(cfg: &Config, force: bool) -> Result<()> {
-    stages::fetch::fetch(cfg, force, false)?;
+/// `--clean` (remove old sources first) isn't ported — the old pipeline's
+/// `clean_sources` deleted per-package build directories by their old
+/// `Config` methods; those are gone now that packages own their own
+/// paths. A `distro`-style buildpack `clean()` exists (see
+/// `Buildpack::clean`) but isn't wired to this flag yet.
+fn fetch(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
+    let kernel = pipeline::kernel_buildpack(config_path)?;
+    kernel.fetch(&pipeline::kernel_ctx(cfg), force)?;
+    pipeline::fetch_new_packages(config_path, cfg, force)
+}
+
+fn build_kernel(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
+    let bp = pipeline::kernel_buildpack(config_path)?;
+    bp.build(&pipeline::kernel_ctx(cfg), force)
+}
+
+fn run_all(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
+    fetch(config_path, cfg, force)?;
     stages::toolchain::build_toolchain()?;
-    stages::kernel::build_kernel(cfg, force)?;
-    stages::userland::build_userland(cfg, force)?;
-    stages::rootfs::assemble_rootfs(cfg, force)?;
+    build_kernel(config_path, cfg, force)?;
+    pipeline::build_new_packages(config_path, cfg, force)?;
+    rootfs::assemble_rootfs(config_path, cfg, force)?;
     stages::image::make_image(cfg, force)?;
     println!("done. run `distroless test-qemu` to boot the image in QEMU.");
     Ok(())
 }
 
 fn list_features() -> Result<()> {
-    for pack in stages::kernel::FEATURE_PACKS {
+    for pack in buildpacks::kernel::FEATURE_PACKS {
         println!("{:<10} {}", pack.key, pack.description);
     }
     Ok(())

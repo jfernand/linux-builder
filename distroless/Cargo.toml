@@ -5,7 +5,10 @@ edition = "2024"
 
 [dependencies]
 builder-core = { path = "../builder-core" }
+buildpack-core = { path = "../buildpack-core" }
+buildpacks = { path = "../buildpacks" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+toml = "1.1.6"
 ratatui = "0.30"
 crossterm = "0.29"
