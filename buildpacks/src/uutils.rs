@@ -12,16 +12,32 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 
 const GNU_TARGET: &str = "x86_64-unknown-linux-gnu";
+const MUSL_TARGET: &str = "x86_64-unknown-linux-musl";
 
 /// Not exhaustive, just enough for a usable minimal shell environment.
 /// `grep`/`sed` are listed but dangle: neither was ever part of
 /// coreutils' scope upstream in uutils, despite the names being tempting
-/// to include here.
+/// to include here. Identical between both variants — uutils supports
+/// the same applets regardless of target libc.
 const COREUTILS_APPLETS: &[&str] = &[
     "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "echo", "pwd", "touch", "chmod", "chown",
     "ln", "grep", "sed", "head", "tail", "sort", "uniq", "wc", "find", "env", "true", "false",
     "test", "[", "df", "du", "date", "uname", "sleep", "kill", "ps",
 ];
+
+/// `distro` (glibc) and `distroless` (musl) both use uutils, with
+/// genuinely different build logic — target triple, cargo feature set,
+/// and static-linking mechanism (glibc needs an explicit
+/// `RUSTFLAGS=-C target-feature=+crt-static`; the musl target is static
+/// by default) — but everything else about the package (source, patch,
+/// applet list, install shape) is identical. One buildpack with a
+/// variant, not two.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UutilsVariant {
+    #[default]
+    Glibc,
+    Musl,
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct UutilsConfig {
@@ -32,11 +48,31 @@ pub struct UutilsConfig {
 #[derive(Default)]
 pub struct Uutils {
     cfg: UutilsConfig,
+    variant: UutilsVariant,
 }
 
 impl Uutils {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn musl() -> Self {
+        Self { variant: UutilsVariant::Musl, ..Self::default() }
+    }
+
+    /// Flips an already-`configure()`d instance to the musl variant —
+    /// for callers using the generic `T::default()` + `configure()`
+    /// construction pattern, where `Self::musl()` isn't reachable directly.
+    pub fn into_musl(mut self) -> Self {
+        self.variant = UutilsVariant::Musl;
+        self
+    }
+
+    fn target(&self) -> &'static str {
+        match self.variant {
+            UutilsVariant::Glibc => GNU_TARGET,
+            UutilsVariant::Musl => MUSL_TARGET,
+        }
     }
 
     fn checkout_dir(&self, ctx: &BuildCtx) -> PathBuf {
@@ -63,8 +99,12 @@ impl Buildpack for Uutils {
             id: "uutils",
             name: "uutils/coreutils",
             summary: "GNU coreutils reimplemented in Rust — one multi-call binary",
-            long_description: "cargo build --release, native x86_64-unknown-linux-gnu \
-                (no cross-compilation), statically linked.",
+            long_description: match self.variant {
+                UutilsVariant::Glibc => "cargo build --release, native x86_64-unknown-linux-gnu \
+                    (no cross-compilation), statically linked via RUSTFLAGS.",
+                UutilsVariant::Musl => "cargo build --release, cross-compiled to \
+                    x86_64-unknown-linux-musl, static by default.",
+            },
         }
     }
 
@@ -85,38 +125,51 @@ impl Buildpack for Uutils {
 
     fn build(&self, ctx: &BuildCtx, force: bool) -> Result<()> {
         let dir = self.checkout_dir(ctx);
-        let binary = cargo_target_dir(&dir).join(GNU_TARGET).join("release").join("coreutils");
+        let target = self.target();
+        let binary = cargo_target_dir(&dir).join(target).join("release").join("coreutils");
 
         if already_built(&binary, force) {
             println!("skip build-uutils: {} already exists", binary.display());
             return Ok(());
         }
 
-        println!("building uutils/coreutils for {GNU_TARGET} (static)");
-        cargo_build_release(
-            &dir,
-            GNU_TARGET,
-            &[
-                "--no-default-features",
-                "--features",
-                // See distro/src/stages/userland.rs's old build_uutils for
-                // why `stty`/`stdbuf` are excluded: neither builds under
-                // plain static linking (stdbuf needs a cdylib; stty's
-                // versioned glibc symbols don't resolve statically).
-                "feat_common_core,arch,kill,hostname,hostid,nohup,nproc,sync,timeout,uname,\
-                 uptime,whoami,\
-                 chgrp,chmod,chown,chroot,groups,id,install,logname,mkfifo,mknod,stat,\
-                 pinky,users,who",
-            ],
-            &[("RUSTFLAGS", "-C target-feature=+crt-static")],
-        )
+        println!("building uutils/coreutils for {target} (static)");
+        match self.variant {
+            UutilsVariant::Glibc => cargo_build_release(
+                &dir,
+                target,
+                &[
+                    "--no-default-features",
+                    "--features",
+                    // See distro/src/stages/userland.rs's old build_uutils
+                    // for why `stty`/`stdbuf` are excluded: neither builds
+                    // under plain static linking (stdbuf needs a cdylib;
+                    // stty's versioned glibc symbols don't resolve
+                    // statically).
+                    "feat_common_core,arch,kill,hostname,hostid,nohup,nproc,sync,timeout,uname,\
+                     uptime,whoami,\
+                     chgrp,chmod,chown,chroot,groups,id,install,logname,mkfifo,mknod,stat,\
+                     pinky,users,who",
+                ],
+                // Static linking needs an explicit crt-static request on
+                // glibc; the musl target is static by default and needs no
+                // equivalent.
+                &[("RUSTFLAGS", "-C target-feature=+crt-static")],
+            ),
+            UutilsVariant::Musl => cargo_build_release(
+                &dir,
+                target,
+                &["--no-default-features", "--features", "feat_os_unix_musl"],
+                &[],
+            ),
+        }
     }
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         let dir = self.checkout_dir(ctx);
-        let path = cargo_target_dir(&dir).join(GNU_TARGET).join("release").join("coreutils");
+        let path = cargo_target_dir(&dir).join(self.target()).join("release").join("coreutils");
         vec![BuildOutput {
-            description: "coreutils multicall binary",
+            description: "coreutils multicall binary".to_string(),
             path,
             rootfs_install: Some(RootfsInstall {
                 dest: PathBuf::from("bin/coreutils"),

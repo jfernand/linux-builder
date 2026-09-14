@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod busybox;
 pub mod cairo;
 pub mod dbus;
 pub mod distro_init;
