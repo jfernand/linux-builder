@@ -14,18 +14,18 @@
     compiler toolchain. This report explains how the thing is actually put
     together: what runs first when the machine powers on, what each binary
     and library in the image is for, how they depend on one another, and how
-    the build pipeline turns sixty-odd separate upstream projects into one
+    the build pipeline turns seventy-odd separate upstream projects into one
     disk image. It is organized the way the system itself is layered — kernel,
     init, a static POSIX base, the seat/session daemons, the Wayland-core
-    libraries, and the graphics stack (libdrm, Mesa, Weston and its cairo
-    chain) — all built and verified, still waiting to actually be launched
-    — rather than as a chronological log of work done.
+    libraries, and the graphics stack, up through Weston itself actually
+    rendering a client via virtio-gpu inside QEMU — rather than as a
+    chronological log of work done.
   ],
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus Phase 3's build side (kernel graphics support, libdrm, Mesa, and now Weston with its full cairo dependency chain) — see §7. Also: a new #cd[Buildpack] trait, proven against 10 packages but not yet wired into #cd[distro]'s own pipeline — see §8.5]),
-    ("Not covered", [Actually launching Weston and getting a client to render via virtio-gpu, through Phase 6 — GPU drivers beyond virtio-gpu, a Rust toolchain on-target, COSMIC itself — see §9]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: a new #cd[Buildpack] trait, proven against 11 packages but not yet wired into #cd[distro]'s own CLI — see §8.5]),
+    ("Not covered", [Phase 4 through Phase 6 — a Rust toolchain on-target, COSMIC itself, real GPU drivers beyond virtio-gpu, audio, networking UI — see §9]),
   ),
 )
 
@@ -584,10 +584,63 @@ demo-client extra — for its kiosk-shell window-decoration code.
   and cairo/fontconfig/freetype/libpng/expat/zlib themselves — shows zero
   leftover host-only runtime dependency: everything resolves to either
   one of these seven packages, an already-built Phase 2/3 sysroot
-  library, or glibc. Not yet wired into `distro`'s own pipeline or rootfs
-  (§9) — that's the next piece, and Phase 3's actual milestone (a client
-  rendering inside QEMU) still needs a `weston.ini` and a
-  `distro-init` change to launch it.
+  library, or glibc.
+
+  Since this table, the actual milestone landed: `assemble-rootfs`
+  picked up all seven packages automatically with zero code changes
+  (they install into the same real sysroot the old pipeline already
+  bulk-copies), and a real QEMU boot got weston all the way to a running
+  compositor with `weston-simple-egl` connected and rendering —
+  DRM/EGL/GL initialize using our own Mesa `softpipe` renderer, `libseat`
+  grants session control, `libinput` configures all three input devices,
+  and `kiosk-shell.so` loads. Getting there past this table surfaced two
+  more real, previously-unnoticed gaps, both fixed and covered next: a
+  missing `xkeyboard-config` data package, and eudev's own rules
+  directory being silently wrong.
+]
+
+== xkeyboard-config, and a second PKG_CONFIG_SYSROOT_DIR casualty
+
+Building weston is not the same as running it. The first real QEMU boot
+attempt failed immediately: `xkbcommon: ERROR: failed to add default
+include path /usr/share/X11/xkb` / `failed to create XKB context` — the
+already-documented gap (§9) that `xkeyboard-config`, the keyboard
+layout/rules *data* package (no C code, nothing links against it — it's
+what `libxkbcommon` looks for at *runtime*), was never built. Adding it
+as an eighth buildpack fixed this cleanly.
+
+The next boot attempt got further — DRM, EGL, and GL all initialized
+successfully against our own Mesa build — then failed differently: every
+input device (`Power Button`, `AT Translated Set 2 keyboard`,
+`ImExPS/2 Generic Explorer Mouse`) was rejected as "not tagged as
+supported input device," and weston aborted with "failed to create
+compositor backend." `strings` on the built `udevd` binary explained
+why: this build host has systemd's own `udev.pc` installed (apt's
+`systemd-dev` package), which eudev's `configure` auto-detects its
+rules directory from — and `PKG_CONFIG_SYSROOT_DIR` rewrote that
+variable into a *literal build-machine absolute path*
+(`.../build-distro/sysroot/usr/lib/x86_64-linux-gnu/udev/rules.d`),
+baked into `udevd` as a compiled-in constant. The same
+`wayland_scanner`-variable bug class documented earlier in this
+section — except silent instead of an immediate build failure, since
+that path genuinely exists *on the build machine*, and only breaks once
+the rootfs is booted as an independent image where it doesn't exist at
+all. `build_eudev` now passes `--with-rootlibexecdir=/usr/lib/udev`
+explicitly, bypassing the sysroot-mangled auto-detection.
+
+#callout(kind: "ok", "Verified — the actual milestone")[
+  With both fixes, a real QEMU boot: `udevd` tags every input device
+  correctly ("is tagged by udev as: Keyboard"/"Mouse"), `weston`
+  (launched with a minimal `weston.ini` selecting `kiosk-shell.so` —
+  without one, weston defaults to `desktop-shell.so`, which was never
+  built) initializes DRM, EGL/GL via our own Mesa `softpipe` Gallium
+  driver, libinput, and the kiosk shell, and opens a Wayland socket.
+  `weston-simple-egl`, run against that socket, connects and runs
+  without error or crash — the actual roadmap milestone: *a minimal
+  Wayland client renders via virtio-gpu inside QEMU.* The new buildpacks
+  and the `eudev` fix needed no CLI/rootfs wiring beyond the existing
+  `assemble-rootfs`/`make-image` — everything lands in the one shared
+  sysroot both the old pipeline and the new buildpacks write into.
 ]
 
 = How It's Actually Built
@@ -708,17 +761,23 @@ from its own stage functions).
   ([`buildpacks`], [One implementation per package, in one crate regardless of which distro(s) end up using it — which distro consumes a package isn't a meaningful axis to split crates on.]),
 )
 
-Ten packages are implemented and verified against the real `distro.toml`
-and the real `build-distro/sysroot` this way so far: the kernel (its
-`FEATURE_PACKS`, §3.2, kept as its own internal mechanism rather than
-becoming buildpacks themselves — they have no source or build step of
-their own), util-linux, Mesa, and the six-package cairo chain above. None
-of it is wired into `distro`'s real CLI yet — every package above still
-builds through the pipeline this section describes, unchanged, and the
-new buildpacks were built through a standalone verification runner
-(`cargo run -p buildpacks --example weston_chain`) that targets the same
-real sysroot, so nothing gets built twice when the remaining ~17 packages
-eventually migrate too.
+Eleven packages are implemented and verified against the real
+`distro.toml` and the real `build-distro/sysroot` this way so far: the
+kernel (its `FEATURE_PACKS`, §3.2, kept as its own internal mechanism
+rather than becoming buildpacks themselves — they have no source or
+build step of their own), util-linux, Mesa, and the seven-package cairo
+chain (including `xkeyboard-config`) above. None of it is wired into
+`distro`'s real CLI yet — every package above still builds through the
+pipeline this section describes, unchanged, and the new buildpacks were
+built through a standalone verification runner (`cargo run -p
+buildpacks --example weston_chain`) that targets the same real sysroot.
+This turned out to need no rootfs-side wiring either: `assemble-rootfs`
+picked up Weston, `weston-simple-egl`, and everything under them
+automatically, with zero code changes, because they install into the
+same shared sysroot `install_sysroot`'s `cp -a` already bulk-copies —
+which is exactly how they ended up actually running inside QEMU (§7.1)
+without a CLI cutover. Nothing gets built twice when the remaining ~16
+packages eventually migrate too.
 
 #callout(kind: "trap", "A regression from trying to fix a bug class, not an instance")[
   `sysroot_env` briefly set `PKG_CONFIG_LIBDIR` (which replaces
@@ -736,7 +795,7 @@ eventually migrate too.
 = What Isn't Part of the Picture Yet
 
 #spec(
-  ("Phase 3", [*Mostly done* — §7's libdrm/Mesa build, and now Weston itself and its full cairo dependency chain, all build and verify cleanly. Still ahead: wiring Weston into `distro`'s own pipeline/rootfs (it currently only builds through a standalone verification runner) and a `weston.ini`/`distro-init` change to actually launch it, so a client renders something inside QEMU.]),
+  ("Phase 3", [*Done* — §7.1's actual milestone verified in a real QEMU boot: `weston-simple-egl` connects to a running Weston compositor and renders via virtio-gpu/Mesa `softpipe`. Not yet done, and left for later: making this happen automatically at boot (today it's started by hand from a login shell with a hand-written `weston.ini`, not a `distro-init` service) — a smaller, well-understood remaining step, not a new unknown.]),
   ("Phase 4", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …).]),
   ("Phase 5", [COSMIC itself — `cosmic-comp`, `cosmic-session`, `cosmic-panel`, `cosmic-greeter`, minimal subset first.]),
   ("Phase 6", [Expand: more COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
