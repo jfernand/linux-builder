@@ -33,6 +33,8 @@ pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_libdisplay_info(cfg, force)?;
     build_libevdev(cfg, force)?;
     build_libinput(cfg, force)?;
+    build_libdrm(cfg, force)?;
+    build_mesa(cfg, force)?;
     build_init(force)?;
     Ok(())
 }
@@ -193,9 +195,10 @@ fn sysroot_abs(cfg: &Config) -> Result<std::path::PathBuf> {
 /// `-I`/`-L` paths pkg-config reports for those `.pc` files get rewritten
 /// from their baked-in `/usr/...` to the sysroot's real, on-disk
 /// `<sysroot>/usr/...` (this is pkg-config's own built-in sysroot handling,
-/// automatic for `Cflags`/`Libs`; it does *not* extend to arbitrary custom
-/// `.pc` variables, which is exactly the problem `build_wayland` below
-/// works around separately). `PATH` gets the sysroot's `bin`/`sbin` too,
+/// automatic for `Cflags`/`Libs` — and, it turns out, for meson's own
+/// `get_variable(pkgconfig: ...)` reads of custom `.pc` variables too, not
+/// just `Cflags`/`Libs` (see `build_wayland`'s doc comment). `PATH` gets
+/// the sysroot's `bin`/`sbin` too,
 /// as a general safety net for any `find_program('some-tool')` by bare
 /// name. Applied to every meson/configure/ninja/make invocation from here
 /// on, not just the ones that need it yet, since which package needs which
@@ -254,7 +257,9 @@ fn sysroot_env(cfg: &Config, cmd: &mut Command) -> Result<()> {
 /// sysroot-absolute prefix would bake in a build-time-only path that
 /// doesn't exist once the binary is copied into the final rootfs (this
 /// broke dbus-daemon in exactly this way before `DESTDIR` replaced a
-/// direct sysroot prefix here). See `build_wayland` for the one exception.
+/// direct sysroot prefix here — every package uses this same pattern now,
+/// `build_wayland` included (see its own doc comment for why it used to
+/// be a special case and no longer needs to be).
 fn meson_build_and_install(cfg: &Config, dir: &std::path::Path, extra_args: &[&str]) -> Result<()> {
     let destdir = sysroot_abs(cfg)?;
 
@@ -582,6 +587,90 @@ fn build_libinput(cfg: &Config, force: bool) -> Result<()> {
             "-Dtests=false",
             "-Ddocumentation=false",
             "-Dlua-plugins=disabled",
+        ],
+    )
+}
+
+/// The kernel-userspace ioctl wrapper library Mesa (and every other
+/// GPU-facing library) builds on. Every vendor-specific KMS API
+/// (intel/radeon/amdgpu/nouveau/...) is disabled — virtio-gpu needs only
+/// libdrm's generic core, not a vendor sub-library.
+fn build_libdrm(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.libdrm_build_dir();
+    let marker = dir.join("build").join("meson-private").join("libdrm.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-libdrm: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing libdrm in {}", dir.display());
+    meson_build_and_install(
+        cfg,
+        &dir,
+        &[
+            "-Dintel=disabled",
+            "-Dradeon=disabled",
+            "-Damdgpu=disabled",
+            "-Dnouveau=disabled",
+            "-Dvmwgfx=disabled",
+            "-Domap=disabled",
+            "-Dexynos=disabled",
+            "-Dfreedreno=disabled",
+            "-Dtegra=disabled",
+            "-Dvc4=disabled",
+            "-Detnaviv=disabled",
+            "-Dcairo-tests=disabled",
+            "-Dman-pages=disabled",
+            "-Dvalgrind=disabled",
+            "-Dtests=false",
+            "-Dudev=true",
+        ],
+    )
+}
+
+/// Phase 3's graphics stack, scoped to QEMU's `virtio-gpu` first (per the
+/// project roadmap): only the `virgl` (hardware-accelerated, talks to
+/// QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback)
+/// gallium drivers, no LLVM (`llvmpipe` — the LLVM-based software
+/// rasterizer — isn't in the driver list, and nothing else needs LLVM
+/// either, answering the roadmap's own open question: this milestone does
+/// not need it), no Vulkan, no GLX/X11 (`platforms=wayland` only, matching
+/// the earlier decision not to build libxcb). `spirv-tools` and
+/// `lmsensors` are both explicitly disabled rather than left on `auto`:
+/// both would otherwise silently pick up unrelated *host* packages via
+/// pkg-config's default search path (this build host has a Homebrew
+/// `SPIRV-Tools` at a nonstandard prefix) that `PKG_CONFIG_SYSROOT_DIR`
+/// then mangles, since that host package was never installed under our
+/// sysroot — a real build failure this surfaced
+/// (`spirv-tools/libspirv.h: No such file or directory`) before being
+/// disabled outright, since neither is needed for this milestone anyway.
+fn build_mesa(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.mesa_build_dir();
+    let marker = dir.join("build").join("meson-private").join("gbm.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-mesa: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing mesa in {}", dir.display());
+    meson_build_and_install(
+        cfg,
+        &dir,
+        &[
+            "-Dplatforms=wayland",
+            "-Dgallium-drivers=virgl,softpipe",
+            "-Dvulkan-drivers=",
+            "-Dllvm=disabled",
+            "-Dglx=disabled",
+            "-Dgbm=enabled",
+            "-Degl=enabled",
+            "-Dopengl=true",
+            "-Dgles1=disabled",
+            "-Dgles2=enabled",
+            "-Dspirv-tools=disabled",
+            "-Dlmsensors=disabled",
         ],
     )
 }
