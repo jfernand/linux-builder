@@ -252,31 +252,31 @@ of, versus leaving as "edit the TOML file yourself":
   ([Build the kernel], [`build-kernel`], [`build-kernel`]),
   ([Pick a version from kernel.org], [`resolve-kernel --channel <stable\|lts>`], [`resolve-kernel --channel <stable\|lts>`]),
   ([Interactive `make menuconfig`], [`menu-config --save-to <path>`], [`menu-config --save-to <path>`]),
-  ([List the available feature packs], [`list-features`], [not exposed — see the table in §3.2 instead]),
+  ([List the available feature packs], [`list-features`], [`list-features`]),
   ([Turn feature packs on], [`kernel.features = [...]` in the config file], [same: `kernel.features = [...]` in `distro.toml` — config-file level support is identical]),
   ([Custom boot logo], [`kernel.logo_file` in the config file], [same, `kernel.logo_file` in `distro.toml`]),
   ([Force any stage to rerun], [global `--force` flag], [global `--force` flag]),
   ([Interactive dashboard], [`tui` — a full terminal UI for every stage plus USB writing], [no equivalent]),
 )
 
-`resolve-kernel` and `menu-config` are now wired up on both sides —
-`menu-config` reuses `builder-core`'s `menuconfig()` directly (it only
-reads `cfg.kernel_build_dir()` and writes the saved config to a separate
-`--save-to` file, never touching the distro's own config file, so it's
-safe unmodified against either `Config` type). `resolve-kernel` needed its
-own thin wrapper in `distro/src/stages/kernel.rs`: `builder-core`'s
-version loads and saves a whole `builder_core::config::Config`, which
-doesn't have `distro`'s `bash`/`util_linux`/`shadow`/`seatd`/… sections —
-loading `distro.toml` through it would fail to parse, and saving would
-silently drop everything those functions don't know about. The kernel.org
-lookup itself was pulled out into a shared `latest_release()` so both
-wrappers reuse the same HTTP/JSON logic without duplicating it.
+`resolve-kernel`, `menu-config`, and `list-features` are now wired up on
+both sides. `menu-config` reuses `builder-core`'s `menuconfig()` directly
+(it only reads `cfg.kernel_build_dir()` and writes the saved config to a
+separate `--save-to` file, never touching the distro's own config file, so
+it's safe unmodified against either `Config` type), and `list-features`
+reuses the same `println!` loop over `FEATURE_PACKS` distroless's own
+`list_features()` uses. `resolve-kernel` needed its own thin wrapper in
+`distro/src/stages/kernel.rs`: `builder-core`'s version loads and saves a
+whole `builder_core::config::Config`, which doesn't have `distro`'s
+`bash`/`util_linux`/`shadow`/`seatd`/… sections — loading `distro.toml`
+through it would fail to parse, and saving would silently drop everything
+those functions don't know about. The kernel.org lookup itself was pulled
+out into a shared `latest_release()` so both wrappers reuse the same
+HTTP/JSON logic without duplicating it.
 
-`list-features` is the one capability still genuinely missing from
-`distro`'s CLI — a small gap, not a limitation of `builder-core`: nothing
-stops the same `println!` loop over `FEATURE_PACKS` distroless's
-`list_features()` uses from being added to `distro/src/main.rs` too,
-nobody has yet. Until then, §3.2's table above is the reference.
+The only remaining CLI-surface difference in this table is `distroless`'s
+`tui` — no equivalent exists for `distro`, and nothing in this section
+claims otherwise.
 
 = The Static Base
 
