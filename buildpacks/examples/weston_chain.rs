@@ -1,9 +1,10 @@
-//! Fetches and builds the 7 new packages weston's mandatory cairo
-//! dependency pulled in (zlib, expat, libpng, freetype, fontconfig,
-//! cairo, weston itself), in dependency order, against the real
-//! `distro.toml` and the real `build-distro/sysroot` — coexisting with
-//! everything the old `distro/src/stages` pipeline already built there
-//! (pixman, wayland, libdisplay-info, libinput, libdrm, mesa, ...).
+//! Fetches and builds the 8 new packages weston's mandatory cairo
+//! dependency (plus its real-boot xkbcommon runtime need) pulled in
+//! (zlib, expat, libpng, freetype, fontconfig, cairo, xkeyboard-config,
+//! weston itself), in dependency order, against the real `distro.toml`
+//! and the real `build-distro/sysroot` — coexisting with everything the
+//! old `distro/src/stages` pipeline already built there (pixman, wayland,
+//! libdisplay-info, libinput, libdrm, mesa, ...).
 //!
 //! Run from the repo root: `cargo run -p buildpacks --example weston_chain`.
 
@@ -15,6 +16,7 @@ use buildpacks::fontconfig::Fontconfig;
 use buildpacks::freetype::Freetype;
 use buildpacks::libpng::Libpng;
 use buildpacks::weston::Weston;
+use buildpacks::xkeyboard_config::XkeyboardConfig;
 use buildpacks::zlib::Zlib;
 use std::path::PathBuf;
 
@@ -45,6 +47,7 @@ fn main() -> Result<()> {
         Box::new(configured::<Freetype>(&root, "freetype")?),
         Box::new(configured::<Fontconfig>(&root, "fontconfig")?),
         Box::new(configured::<Cairo>(&root, "cairo")?),
+        Box::new(configured::<XkeyboardConfig>(&root, "xkeyboard_config")?),
         Box::new(configured::<Weston>(&root, "weston")?),
     ];
 
@@ -79,6 +82,6 @@ fn main() -> Result<()> {
         println!("=== {} done ===", pack.id());
     }
 
-    println!("\nall 7 packages built successfully.");
+    println!("\nall {} packages built successfully.", packs.len());
     Ok(())
 }

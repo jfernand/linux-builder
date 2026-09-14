@@ -7,4 +7,5 @@ pub mod libpng;
 pub mod mesa;
 pub mod util_linux;
 pub mod weston;
+pub mod xkeyboard_config;
 pub mod zlib;

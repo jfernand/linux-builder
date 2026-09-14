@@ -102,6 +102,10 @@ url = "https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0
 version = "1.18.2"
 url = "https://www.cairographics.org/releases/cairo-1.18.2.tar.xz"
 
+[xkeyboard_config]
+version = "2.44"
+url = "https://xorg.freedesktop.org/archive/individual/data/xkeyboard-config/xkeyboard-config-2.44.tar.xz"
+
 [weston]
 version = "16.0.0"
 url = "https://gitlab.freedesktop.org/wayland/weston/-/archive/16.0.0/weston-16.0.0.tar.gz"
