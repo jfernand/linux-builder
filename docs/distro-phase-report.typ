@@ -196,6 +196,47 @@ Fourteen named bundles, each just a curated list of Kconfig options one
   desktop eventually, none of that has happened yet.
 ]
 
+== menuconfig's own menu tree, and what we actually touch
+
+The fourteen packs above are this project's own grouping, not the kernel's.
+Run `make menuconfig` against the fetched sources (via `menu-config`, §3.4)
+and the kernel presents its *own* top-level menu structure — fourteen
+menus of its own, as it happens, though not the same fourteen. Reading
+straight from this kernel's own `Kconfig` files (not from memory), in the
+order the config parser actually reaches them:
+
+#dtable(
+  columns: (auto, 1fr),
+  align: (left, left),
+  ([menuconfig's top-level menu], [Do any of our packs touch it?]),
+  ([General setup], [No — left exactly as `defconfig` set it. Init system choice, cgroups, namespaces, `printk`, the core boot-essential baseline.]),
+  ([Processor type and features], [No — CPU family, SMP, NUMA, `IA32_EMULATION`'s sibling 64-bit options all stay at `defconfig` defaults.]),
+  ([Power management and ACPI options], [No — ACPI itself is part of the untouched boot-essential baseline the project's own docs call out explicitly.]),
+  ([Bus options (PCI etc.)], [Yes — `legacy-buses` (PCMCIA/CardBus). Plain PCI itself is untouched.]),
+  ([Binary Emulations], [Yes — `ia32-emulation` is literally the only option in this menu our packs name.]),
+  ([Executable file formats], [No — ELF support stays at `defconfig` defaults.]),
+  ([Memory Management options], [No — untouched.]),
+  ([Networking support], [Yes — `wireless` (cfg80211/mac80211/rfkill) and `netfilter` (conntrack/NAT/iptables) both live here.]),
+  ([Device Drivers], [Yes, the most — `graphics`, `sound`, `wireless` (the actual wireless-LAN drivers, as opposed to the stack above), `hid-extras`, `legacy-nics`, `legacy-buses` (PATA chipset drivers), `boot-logo`, and `iommu` all touch submenus here.]),
+  ([File systems], [Yes — `network-fs` (NFS/9P/autofs), `iso9660`, and part of `security-extras` (disk quotas).]),
+  ([Security options], [Yes — `security-extras` (SELinux).]),
+  ([Cryptographic API], [No — untouched.]),
+  ([Library routines], [No — untouched.]),
+  ([Kernel hacking], [Yes — `debug`.]),
+)
+
+#callout(kind: "info", "Reading this the other way round")[
+  Seven of the kernel's fourteen top-level menus have at least one pack
+  reaching into them; the other seven — *General setup*, *Processor type
+  and features*, *Power management and ACPI options*, *Executable file
+  formats*, *Memory Management options*, *Cryptographic API*, and *Library
+  routines* — the boot-essential core, plus crypto and the C library shims
+  — are entirely untouched by this project's own config, left exactly as
+  `defconfig` produced them. That's deliberate: the packs exist to strip
+  *optional* hardware/feature surface, not to second-guess what a working
+  x86_64 boot actually requires.
+]
+
 == What's exposed by each CLI
 
 Everything in §3.1–3.2 lives in `builder-core::stages::kernel` as generic,
@@ -209,8 +250,8 @@ of, versus leaving as "edit the TOML file yourself":
   ([Capability], [`distroless`], [`distro`]),
   ([Fetch kernel source], [`fetch [--clean]`], [`fetch`]),
   ([Build the kernel], [`build-kernel`], [`build-kernel`]),
-  ([Pick a version from kernel.org], [`resolve-kernel --channel <stable\|lts>`], [not exposed — edit `[kernel] version`/`url` in `distro.toml` by hand]),
-  ([Interactive `make menuconfig`], [`menu-config --save-to <path>`], [not exposed — no way to reach an interactive config session]),
+  ([Pick a version from kernel.org], [`resolve-kernel --channel <stable\|lts>`], [`resolve-kernel --channel <stable\|lts>`]),
+  ([Interactive `make menuconfig`], [`menu-config --save-to <path>`], [`menu-config --save-to <path>`]),
   ([List the available feature packs], [`list-features`], [not exposed — see the table in §3.2 instead]),
   ([Turn feature packs on], [`kernel.features = [...]` in the config file], [same: `kernel.features = [...]` in `distro.toml` — config-file level support is identical]),
   ([Custom boot logo], [`kernel.logo_file` in the config file], [same, `kernel.logo_file` in `distro.toml`]),
@@ -218,13 +259,24 @@ of, versus leaving as "edit the TOML file yourself":
   ([Interactive dashboard], [`tui` — a full terminal UI for every stage plus USB writing], [no equivalent]),
 )
 
-The three rows marked "not exposed" are a CLI gap, not a capability gap —
-`resolve_kernel()` and `menuconfig()` in `builder-core` don't care which
-distro calls them, and `distro`'s own `Config` struct already has the same
-`kernel.features`/`kernel.config_file`/`kernel.logo_file` fields
-`distroless`'s does (§3.1–3.2 work identically for both once the TOML is
-edited by hand). `distro`'s CLI was scaffolded thinner than `distroless`'s
-in Phase 0 and nothing has come back to add the missing subcommands since.
+`resolve-kernel` and `menu-config` are now wired up on both sides —
+`menu-config` reuses `builder-core`'s `menuconfig()` directly (it only
+reads `cfg.kernel_build_dir()` and writes the saved config to a separate
+`--save-to` file, never touching the distro's own config file, so it's
+safe unmodified against either `Config` type). `resolve-kernel` needed its
+own thin wrapper in `distro/src/stages/kernel.rs`: `builder-core`'s
+version loads and saves a whole `builder_core::config::Config`, which
+doesn't have `distro`'s `bash`/`util_linux`/`shadow`/`seatd`/… sections —
+loading `distro.toml` through it would fail to parse, and saving would
+silently drop everything those functions don't know about. The kernel.org
+lookup itself was pulled out into a shared `latest_release()` so both
+wrappers reuse the same HTTP/JSON logic without duplicating it.
+
+`list-features` is the one capability still genuinely missing from
+`distro`'s CLI — a small gap, not a limitation of `builder-core`: nothing
+stops the same `println!` loop over `FEATURE_PACKS` distroless's
+`list_features()` uses from being added to `distro/src/main.rs` too,
+nobody has yet. Until then, §3.2's table above is the reference.
 
 = The Static Base
 
