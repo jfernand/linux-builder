@@ -52,6 +52,7 @@ fn main() -> Result<()> {
         "[topo_order] ok: {:?}",
         order.iter().map(|&i| packs[i].id()).collect::<Vec<_>>()
     );
+    buildpack_core::graph::write_svg(&packs, &PathBuf::from("build-distro/dependency-graph.svg"))?;
 
     // --- 2. UtilLinux: full fresh fetch+build into a scratch dir --------
     let scratch = PathBuf::from("/tmp/buildpack-verify");

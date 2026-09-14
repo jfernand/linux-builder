@@ -74,6 +74,38 @@ url = "https://gitlab.freedesktop.org/mesa/drm/-/archive/libdrm-2.4.134/drm-libd
 version = "26.2.2"
 url = "https://gitlab.freedesktop.org/mesa/mesa/-/archive/mesa-26.2.2/mesa-mesa-26.2.2.tar.gz"
 
+# The rest of weston's mandatory (not optional) cairo dependency chain —
+# built as buildpacks (see buildpacks/src/{zlib,expat,libpng,freetype,
+# fontconfig,cairo,weston}.rs), not yet wired into `distro`'s own CLI.
+
+[zlib]
+version = "1.3.2"
+url = "https://zlib.net/zlib-1.3.2.tar.gz"
+
+[expat]
+version = "2.7.1"
+url = "https://github.com/libexpat/libexpat/releases/download/R_2_7_1/expat-2.7.1.tar.xz"
+
+[libpng]
+version = "1.6.44"
+url = "https://download.sourceforge.net/libpng/libpng-1.6.44.tar.xz"
+
+[freetype]
+version = "2.13.3"
+url = "https://downloads.sourceforge.net/freetype/freetype-2.13.3.tar.xz"
+
+[fontconfig]
+version = "2.15.0"
+url = "https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz"
+
+[cairo]
+version = "1.18.2"
+url = "https://www.cairographics.org/releases/cairo-1.18.2.tar.xz"
+
+[weston]
+version = "16.0.0"
+url = "https://gitlab.freedesktop.org/wayland/weston/-/archive/16.0.0/weston-16.0.0.tar.gz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048
