@@ -23,6 +23,8 @@ pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_bash(cfg, force)?;
     build_util_linux(cfg, force)?;
     build_shadow(cfg, force)?;
+    build_seatd(cfg, force)?;
+    build_dbus(cfg, force)?;
     build_init(force)?;
     Ok(())
 }
@@ -166,6 +168,86 @@ fn build_shadow(cfg: &Config, force: bool) -> Result<()> {
         // configure-time.
         Command::new("make").arg(format!("-j{}", num_cpus())).arg("LDFLAGS=-all-static"),
     )?;
+
+    Ok(())
+}
+
+/// seatd is the first thing built here with meson/ninja instead of
+/// autotools — and, per its own README, "Depends only on libc," so it
+/// could in principle still be statically linked. It's built dynamically
+/// anyway for consistency with dbus and everything after it (Phase 2's
+/// switch away from Phase 1's all-static approach).
+fn build_seatd(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.seatd_build_dir();
+    let build_dir = dir.join("build");
+    let binary = build_dir.join("seatd");
+
+    if already_built(&binary, force) {
+        println!("skip build-seatd: {} already exists", binary.display());
+        return Ok(());
+    }
+
+    println!("configuring seatd in {}", dir.display());
+    run_in(
+        &dir,
+        Command::new("meson").arg("setup").arg("build").args([
+            "--prefix=/usr",
+            "-Dlibseat-logind=disabled",
+            "-Dlibseat-seatd=enabled",
+            "-Dserver=enabled",
+            "-Dman-pages=disabled",
+            "-Dexamples=disabled",
+        ]),
+    )?;
+
+    println!("building seatd");
+    run_in(&dir, Command::new("ninja").arg("-C").arg("build"))?;
+
+    Ok(())
+}
+
+/// dbus is the first genuinely dynamically-linked dependency in the
+/// distro: it needs libexpat for XML parsing, which isn't practical to
+/// statically link (see the config.rs/rootfs.rs comments on the dynamic
+/// linker/dependency-copying machinery this introduces).
+fn build_dbus(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.dbus_build_dir();
+    let build_dir = dir.join("build");
+    let binary = build_dir.join("bus").join("dbus-daemon");
+
+    if already_built(&binary, force) {
+        println!("skip build-dbus: {} already exists", binary.display());
+        return Ok(());
+    }
+
+    println!("configuring dbus in {}", dir.display());
+    run_in(
+        &dir,
+        Command::new("meson").arg("setup").arg("build").args([
+            "--prefix=/usr",
+            // Our rootfs has no "messagebus" user (or any non-root user
+            // yet) for the daemon to drop privileges to, so it runs and
+            // stays as root; /run over the default /var/local/run so the
+            // socket ends up where a "standard" system bus expects it.
+            "-Druntime_dir=/run",
+            "-Dsystem_socket=/run/dbus/system_bus_socket",
+            "-Ddbus_user=root",
+            "-Dsession_socket_dir=/tmp",
+            "-Dsystemd=disabled",
+            "-Dselinux=disabled",
+            "-Dapparmor=disabled",
+            "-Dlaunchd=disabled",
+            "-Dx11_autolaunch=disabled",
+            "-Ddoxygen_docs=disabled",
+            "-Dxml_docs=disabled",
+            "-Dqt_help=disabled",
+            "-Dmodular_tests=disabled",
+            "-Dasserts=false",
+        ]),
+    )?;
+
+    println!("building dbus");
+    run_in(&dir, Command::new("ninja").arg("-C").arg("build"))?;
 
     Ok(())
 }
