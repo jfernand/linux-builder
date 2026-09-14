@@ -41,6 +41,22 @@ pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
         force,
     )?;
 
+    fetch_tarball(
+        cfg,
+        &cfg.seatd.url,
+        &format!("seatd-{}.tar.gz", cfg.seatd.version),
+        &cfg.seatd_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.dbus.url,
+        &format!("dbus-{}.tar.xz", cfg.dbus.version),
+        &cfg.dbus_build_dir(),
+        force,
+    )?;
+
     fetch_uutils(cfg, force)?;
 
     Ok(())
