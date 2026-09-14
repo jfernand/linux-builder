@@ -1,3 +1,10 @@
+pub mod cairo;
+pub mod expat;
+pub mod fontconfig;
+pub mod freetype;
 pub mod kernel;
+pub mod libpng;
 pub mod mesa;
 pub mod util_linux;
+pub mod weston;
+pub mod zlib;
