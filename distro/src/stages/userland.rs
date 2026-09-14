@@ -436,6 +436,25 @@ fn build_eudev(cfg: &Config, force: bool) -> Result<()> {
         &[
             "--sysconfdir=/etc",
             "--libdir=/usr/lib/x86_64-linux-gnu",
+            // Explicit, not auto-detected: this build host has systemd's
+            // own udev.pc installed (apt's systemd-dev package), which
+            // eudev's configure otherwise finds via pkg-config to derive
+            // its rules/rootlibexecdir — and PKG_CONFIG_SYSROOT_DIR
+            // rewrites that variable into a literal BUILD-MACHINE
+            // absolute path (.../build-distro/sysroot/usr/lib/.../udev),
+            // baked into udevd as a compiled-in constant. Silently
+            // "works" on the build machine (the path genuinely exists
+            // there) but doesn't exist inside a booted, independent
+            // image, so udevd finds zero rules and tags no input
+            // devices — libinput then rejects every device as "not
+            // tagged as supported," discovered only via an actual QEMU
+            // boot test that exercised weston's input-device handling
+            // (same wayland_scanner-variable bug class as documented
+            // elsewhere, just silent instead of an immediate build
+            // failure). Fixed the same way: force the correct, real
+            // target-relative value directly instead of trusting the
+            // sysroot-mangled auto-detected one.
+            "--with-rootlibexecdir=/usr/lib/udev",
             "--disable-blkid",
             "--disable-selinux",
             "--disable-kmod",
