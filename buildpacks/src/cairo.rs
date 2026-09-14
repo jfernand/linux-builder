@@ -45,12 +45,7 @@ impl Buildpack for Cairo {
     }
 
     fn dependencies(&self) -> &'static [&'static str] {
-        // Also needs pixman, already built by the old distro/src/stages
-        // pipeline into the same real sysroot — not listed here since
-        // pixman isn't a buildpack yet (this run's registry only orders
-        // buildpacks that ARE registered; pixman's .pc file is already
-        // on disk regardless).
-        &["freetype", "fontconfig", "libpng", "zlib"]
+        &["freetype", "fontconfig", "libpng", "zlib", "pixman"]
     }
 
     fn describe(&self) -> Description {

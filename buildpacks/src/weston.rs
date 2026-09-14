@@ -44,12 +44,21 @@ impl Buildpack for Weston {
     }
 
     fn dependencies(&self) -> &'static [&'static str] {
-        // Also needs wayland, wayland-protocols, libxkbcommon, pixman,
-        // libdisplay-info, libinput, libdrm, mesa, seatd, dbus — all
-        // already built by the old distro/src/stages pipeline into the
-        // same real sysroot, not listed here since none of them are
-        // buildpacks yet (see Cairo's doc comment for the same caveat).
-        &["cairo", "libpng"]
+        &[
+            "cairo",
+            "libpng",
+            "wayland",
+            "wayland_protocols",
+            "libxkbcommon",
+            "pixman",
+            "libdisplay_info",
+            "libinput",
+            "libdrm",
+            "mesa",
+            "seatd",
+            "dbus",
+            "eudev",
+        ]
     }
 
     fn describe(&self) -> Description {
