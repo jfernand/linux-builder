@@ -33,6 +33,34 @@ url = "https://dbus.freedesktop.org/releases/dbus/dbus-1.16.2.tar.xz"
 version = "3.2.14"
 url = "https://github.com/eudev-project/eudev/releases/download/v3.2.14/eudev-3.2.14.tar.gz"
 
+[wayland]
+version = "1.26.0"
+url = "https://gitlab.freedesktop.org/-/project/121/uploads/5f5d2e19a230e8b8250d9a7c2f280846/wayland-1.26.0.tar.xz"
+
+[wayland_protocols]
+version = "1.49"
+url = "https://gitlab.freedesktop.org/-/project/2891/uploads/7ed597f0cad076a17fe36f8860596f8c/wayland-protocols-1.49.tar.xz"
+
+[libxkbcommon]
+version = "1.12.4"
+url = "https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-1.12.4.tar.gz"
+
+[pixman]
+version = "0.46.4"
+url = "https://gitlab.freedesktop.org/pixman/pixman/-/archive/pixman-0.46.4/pixman-pixman-0.46.4.tar.gz"
+
+[libdisplay_info]
+version = "0.4.0"
+url = "https://gitlab.freedesktop.org/-/project/14497/uploads/289d58230e2981b51f23d31faf25bef9/libdisplay-info-0.4.0.tar.xz"
+
+[libevdev]
+version = "1.13.7"
+url = "https://gitlab.freedesktop.org/libevdev/libevdev/-/archive/libevdev-1.13.7/libevdev-libevdev-1.13.7.tar.gz"
+
+[libinput]
+version = "1.31.3"
+url = "https://gitlab.freedesktop.org/libinput/libinput/-/archive/1.31.3/libinput-1.31.3.tar.gz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048

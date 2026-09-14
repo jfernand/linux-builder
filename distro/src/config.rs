@@ -19,6 +19,13 @@ pub struct Config {
     pub seatd: SeatdConfig,
     pub dbus: DbusConfig,
     pub eudev: EudevConfig,
+    pub wayland: WaylandConfig,
+    pub wayland_protocols: WaylandProtocolsConfig,
+    pub libxkbcommon: LibxkbcommonConfig,
+    pub pixman: PixmanConfig,
+    pub libdisplay_info: LibdisplayInfoConfig,
+    pub libevdev: LibevdevConfig,
+    pub libinput: LibinputConfig,
     pub image: ImageConfig,
     #[serde(default = "default_build_dir")]
     pub build_dir: PathBuf,
@@ -60,6 +67,54 @@ pub struct DbusConfig {
 /// libinput (Phase 2's real device-manager daemon, alongside seatd/dbus).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EudevConfig {
+    pub version: String,
+    pub url: String,
+}
+
+// The rest of Phase 2: link-time libraries for Phase 3's compositor, none
+// of them running as services (no distro-init changes needed for these).
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WaylandConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WaylandProtocolsConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LibxkbcommonConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PixmanConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LibdisplayInfoConfig {
+    pub version: String,
+    pub url: String,
+}
+
+/// libinput's mandatory (not optional) dependency for reading raw input
+/// devices — built from source rather than taken from the host, same as
+/// every other runtime dependency from Phase 2 on.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LibevdevConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LibinputConfig {
     pub version: String,
     pub url: String,
 }
@@ -123,6 +178,61 @@ impl Config {
 
     pub fn eudev_build_dir(&self) -> PathBuf {
         self.build_dir.join("eudev").join(format!("eudev-{}", self.eudev.version))
+    }
+
+    pub fn wayland_build_dir(&self) -> PathBuf {
+        self.build_dir.join("wayland").join(format!("wayland-{}", self.wayland.version))
+    }
+
+    pub fn wayland_protocols_build_dir(&self) -> PathBuf {
+        self.build_dir
+            .join("wayland-protocols")
+            .join(format!("wayland-protocols-{}", self.wayland_protocols.version))
+    }
+
+    /// GitHub's tag archive nests an extra `libxkbcommon-` prefix onto the
+    /// tag name (`libxkbcommon-xkbcommon-1.12.4/`), unlike every other
+    /// dependency's tarball, which extracts to just `<name>-<version>/`.
+    pub fn libxkbcommon_build_dir(&self) -> PathBuf {
+        self.build_dir.join("libxkbcommon").join(format!(
+            "libxkbcommon-xkbcommon-{}",
+            self.libxkbcommon.version
+        ))
+    }
+
+    /// Same GitLab-archive double-naming as libxkbcommon's GitHub one:
+    /// extracts to `pixman-pixman-<version>/`.
+    pub fn pixman_build_dir(&self) -> PathBuf {
+        self.build_dir.join("pixman").join(format!("pixman-pixman-{}", self.pixman.version))
+    }
+
+    pub fn libdisplay_info_build_dir(&self) -> PathBuf {
+        self.build_dir
+            .join("libdisplay-info")
+            .join(format!("libdisplay-info-{}", self.libdisplay_info.version))
+    }
+
+    /// Same GitLab-archive double-naming again: `libevdev-libevdev-<version>/`.
+    pub fn libevdev_build_dir(&self) -> PathBuf {
+        self.build_dir
+            .join("libevdev")
+            .join(format!("libevdev-libevdev-{}", self.libevdev.version))
+    }
+
+    pub fn libinput_build_dir(&self) -> PathBuf {
+        self.build_dir.join("libinput").join(format!("libinput-{}", self.libinput.version))
+    }
+
+    /// Staging install prefix all of Phase 2's meson/autotools packages
+    /// install into as part of building (not just at rootfs-assembly
+    /// time) — so a later package's build (e.g. wayland-protocols needing
+    /// wayland-scanner, libinput needing eudev's libudev) can find an
+    /// earlier one via `PKG_CONFIG_PATH`/`PATH`, the same way a real
+    /// distro's build pipeline chains packages through a sysroot instead
+    /// of the host's own system paths. `assemble_rootfs` copies this
+    /// whole tree into the final rootfs verbatim.
+    pub fn sysroot_dir(&self) -> PathBuf {
+        self.build_dir.join("sysroot")
     }
 
     pub fn rootfs_dir(&self) -> PathBuf {
