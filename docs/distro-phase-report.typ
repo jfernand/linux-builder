@@ -14,17 +14,18 @@
     compiler toolchain. This report explains how the thing is actually put
     together: what runs first when the machine powers on, what each binary
     and library in the image is for, how they depend on one another, and how
-    the build pipeline turns forty-odd separate upstream projects into one
+    the build pipeline turns fifty-odd separate upstream projects into one
     disk image. It is organized the way the system itself is layered — kernel,
-    init, a static POSIX base, the seat/session daemons, and the still-unused
-    Wayland-core libraries waiting for a compositor — rather than as a
-    chronological log of work done.
+    init, a static POSIX base, the seat/session daemons, the Wayland-core
+    libraries, and the graphics stack (libdrm, Mesa) — all still waiting for
+    a compositor to actually call into them — rather than as a chronological
+    log of work done.
   ],
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Coverage", [Everything built and QEMU-verified through Phase 2 — a real kernel, real login, seat/session daemons, Wayland-core libraries]),
-    ("Not covered", [Phases 3–6: a compositor, GPU drivers, a Rust toolchain on-target, COSMIC itself — see §7]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus Phase 3's build-side half (kernel graphics support, libdrm, Mesa) — see §7]),
+    ("Not covered", [The rest of Phase 3 (a Wayland client actually rendering via virtio-gpu) through Phase 6 — a compositor, GPU drivers, a Rust toolchain on-target, COSMIC itself — see §9]),
   ),
 )
 
@@ -54,8 +55,9 @@ same way a bootstrap compiler is infrastructure for a self-hosting language.
   ("§ 4", [The static base: coreutils, shell, login — one binary in, no shared-library bookkeeping.]),
   ("§ 5", [The seat/session layer: seatd, dbus, eudev — what each one actually does.]),
   ("§ 6", [The Wayland-core libraries — built, installed, not yet used by anything.]),
-  ("§ 7", [How it's all actually built: the pipeline, the config file, the sysroot.]),
-  ("§ 8", [What isn't part of the picture yet.]),
+  ("§ 7", [The graphics stack: libdrm, Mesa, and what DRI/Gallium/EGL/GBM actually are.]),
+  ("§ 8", [How it's all actually built: the pipeline, the config file, the sysroot.]),
+  ("§ 9", [What isn't part of the picture yet.]),
 )
 
 = The Boot Sequence
@@ -89,7 +91,7 @@ writes its own init (§2.2) that does five things and nothing else.
   session, not inferred from source reading: `login: root` → no password
   prompt → `-bash-5.2#` → `dbus-send --system … ListNames` returns a real
   reply → `udevadm info --query=all --name=/dev/tty1` returns a populated
-  device entry. See §7.4 for the harness.
+  device entry. See §8.4 for the harness.
 ]
 
 == Why a custom init at all
@@ -307,7 +309,7 @@ equivalent to reach for.
   columns: (auto, auto, auto, 1fr),
   align: (left, left, left, left),
   ([Package], [Version], [Provides], [Why it's there]),
-  ([uutils/coreutils], [git `main`], [`ls`, `cat`, `cp`, …], [A Rust reimplementation of GNU coreutils — one multi-call binary, symlinked under every applet name. The built feature set is a curated subset (see §8), not the full set.]),
+  ([uutils/coreutils], [git `main`], [`ls`, `cat`, `cp`, …], [A Rust reimplementation of GNU coreutils — one multi-call binary, symlinked under every applet name. The built feature set is a curated subset (see §9), not the full set.]),
   ([bash], [5.2.37], [`/bin/bash`, `/bin/sh`], [The login shell named in `/etc/passwd`.]),
   ([util-linux], [2.41.2], [`agetty`, `mount`, `umount`], [Built with `--disable-all-programs` plus explicit `--enable-*` for just these three — util-linux ships dozens of tools, only these are needed.]),
   ([shadow-utils], [4.17.4], [`login`, `passwd`], [Real `/etc/passwd` + `/etc/shadow` authentication — not BusyBox's separate empty-password mechanism, genuine shadow-file semantics.]),
@@ -317,7 +319,7 @@ All five are *statically linked* — `--disable-shared --enable-static` at
 configure time, `LDFLAGS=-all-static` at `make` time (plain `-static` alone
 breaks configure's own compiler sanity check once libtool is involved). One
 binary compiled, one binary copied into the rootfs, nothing else to track.
-This is why they sit apart from everything in §5–6: dynamic linking doesn't
+This is why they sit apart from everything in §5–7: dynamic linking doesn't
 enter the picture until `dbus` (§5), which needs `libexpat` and isn't
 meaningfully staticable.
 
@@ -394,17 +396,130 @@ observable."
   ([Package], [Version], [What it's for]),
   ([wayland], [1.26.0], [The core wire-protocol libraries (client, server, cursor, EGL) and `wayland-scanner`, the code generator every later Wayland package runs at its own build time.]),
   ([wayland-protocols], [1.49], [The actual protocol definitions — `xdg-shell` and the rest — as XML. No library of its own, just data plus a pkg-config file.]),
-  ([libxkbcommon], [1.12.4], [Turns "us, evdev, pc105" into the keymap tables a compositor hands to clients. X11 support is off (no `libxcb` — see §8); real keymap compilation needs the `xkeyboard-config` data package, also not built yet.]),
+  ([libxkbcommon], [1.12.4], [Turns "us, evdev, pc105" into the keymap tables a compositor hands to clients. X11 support is off (no `libxcb` — see §9); real keymap compilation needs the `xkeyboard-config` data package, also not built yet.]),
   ([pixman], [0.46.4], [Software rasterization — Mesa's fallback path, and some compositor-side operations not worth sending to the GPU.]),
   ([libdisplay-info], [0.4.0], [Parses a monitor's own EDID/DisplayID — how a compositor learns what resolutions and refresh rates a display actually supports.]),
   ([libevdev], [1.13.7], [Reads and writes raw evdev input-device events. `libinput`'s one mandatory dependency.]),
-  ([libinput], [1.31.3], [Turns raw evdev events into the pointer/keyboard/touch/gesture events a compositor actually wants. `libwacom` (tablets) and `mtdev` (legacy multitouch) are both left out — see §8.]),
+  ([libinput], [1.31.3], [Turns raw evdev events into the pointer/keyboard/touch/gesture events a compositor actually wants. `libwacom` (tablets) and `mtdev` (legacy multitouch) are both left out — see §9.]),
 )
 
 The dependency order between them is also the build order: `wayland` first
 (nothing else here can build without `wayland-scanner`), then
 `wayland-protocols` (needs `wayland-scanner` on `PATH`), then the rest, with
 `libinput` last since it needs both `eudev`'s `libudev` (§5) and `libevdev`.
+
+= The Graphics Stack
+
+Phase 3's charter, per the project's own roadmap: get a graphics stack
+working, scoped first to QEMU's own virtual GPU rather than real hardware.
+Nothing in this section produces pixels on screen yet either — the
+roadmap's own Phase 3 milestone is a minimal Wayland client actually
+rendering something via virtio-gpu, which needs a compositor to host it
+and is still ahead, not part of what's covered here — but this is the
+piece that turns "a kernel that can talk to a GPU" into "a library a
+compositor can actually call into."
+
+#callout(kind: "info", "DRI, Gallium, EGL, GBM — what these actually are")[
+  The kernel's DRM subsystem (already built — `CONFIG_DRM_VIRTIO_GPU`, part
+  of the `graphics` feature pack, §3.2) owns the GPU at the lowest level:
+  it hands out framebuffers and submits command buffers, but has no idea
+  what "draw a triangle" means. *Mesa* is the userspace library that turns
+  OpenGL/OpenGL ES calls into whatever that specific GPU actually
+  understands. *Gallium* is Mesa's own internal plumbing for doing that
+  once per GPU family instead of once per API — a "Gallium driver" is the
+  translator for one specific GPU (or, here, one specific *virtual* one).
+  *DRI* (Direct Rendering Infrastructure) is the convention by which an
+  application actually finds and loads the right one at runtime. *EGL* is
+  the glue between a window system (Wayland, here) and an OpenGL/GLES
+  context — it's what a compositor or client actually links against, not
+  Mesa's internals directly. *GBM* (Generic Buffer Management) is how a
+  Wayland compositor allocates the actual pixel buffers it hands to the
+  DRM/KMS display hardware — the piece that makes a rendered frame
+  actually show up on a screen, as opposed to just existing in GPU memory.
+]
+
+#dtable(
+  columns: (auto, auto, 1fr),
+  align: (left, left, left),
+  ([Package], [Version], [What it's for]),
+  ([libdrm], [2.4.134], [The kernel-userspace ioctl wrapper every GPU-facing library, Mesa included, builds on. Every vendor-specific sub-library (Intel/AMD/nouveau/...) is disabled — virtio-gpu needs only libdrm's generic core.]),
+  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the actual Gallium driver (`libgallium-26.2.2.so`) — built scoped to just the `virgl` (talks to QEMU's virtio-gpu/virgl backend, hardware-accelerated) and `softpipe` (software fallback) Gallium drivers.]),
+)
+
+Mesa's build answers a question the roadmap explicitly left open: whether
+its virtio-gpu path needs LLVM (for `llvmpipe`, the LLVM-based software
+rasterizer) or can go LLVM-free. It can — `llvmpipe` isn't in the driver
+list above, `-Dllvm=disabled` is passed explicitly, and Mesa built and
+installed cleanly regardless, since neither `virgl` nor `softpipe` needs
+LLVM for anything. Vulkan is off entirely (`-Dvulkan-drivers=`, empty —
+this milestone is OpenGL/GLES only), and so is GLX/X11
+(`-Dplatforms=wayland`, `-Dglx=disabled`), consistent with the earlier
+decision not to build `libxcb` (§9).
+
+#callout(kind: "note", "A toolchain bump: meson via pip, not apt")[
+  Mesa needs meson ≥ 1.4.0; Ubuntu 24.04's own `apt` package is 1.3.2.
+  `build-toolchain` now also checks the installed meson's version and, if
+  it's too old, runs `pip install --user --upgrade meson` — `sysroot_env`
+  puts `~/.local/bin` ahead of `/usr/bin` on `PATH` explicitly for every
+  build invocation from here on, rather than assuming the invoking shell
+  already has it there.
+]
+
+#callout(kind: "trap", "One design limitation, three different packages")[
+  `PKG_CONFIG_SYSROOT_DIR` (§8.3) is essential for letting one sysroot
+  package's build find another's `-I`/`-L` flags correctly — but it applies
+  uniformly to *everything* pkg-config resolves, with no way to tell "a
+  package genuinely installed under our sysroot" apart from "a host build
+  tool that happens to be installed for unrelated reasons." Phase 3 hit
+  this three separate times, needing three different fixes — the same
+  underlying limitation surfacing again, not the same bug recurring:
+
+  - *Mesa's optional `spirv-tools` support* found this build host's own
+    Homebrew-installed `SPIRV-Tools` (a nonstandard prefix,
+    `/home/linuxbrew/...`), whose real include path then got rewritten
+    into a sysroot location it was never installed under. Fixed by forcing
+    `PKG_CONFIG=/usr/bin/pkg-config` in `sysroot_env` — the system pkg-config's
+    own default search dirs never point outside a normal Ubuntu install,
+    unlike Homebrew's own pkg-config wrapper, which bakes in Homebrew's
+    paths as compiled-in defaults.
+  - *libxkbcommon's optional `xkbregistry`* (XDG-style layout enumeration —
+    not needed for keymap compilation itself) needed `libxml2`, which
+    turned out to be genuinely installed at the *standard* system location
+    too (`apt`'s `libxml2-dev`) — the `PKG_CONFIG` fix above doesn't help
+    when the leak is a real system package, not a Homebrew one. Fixed by
+    disabling the feature outright (`-Denable-xkbregistry=false`), since
+    it isn't needed anyway.
+  - *libdisplay-info's `hwdata` lookup* (a vendor-ID database it embeds at
+    *build* time, nothing reads it at target runtime) isn't optional the
+    way the other two are, so neither fix above applied. Its own
+    `meson.build` already had a literal, correct fallback path for exactly
+    this case (`/usr/share/hwdata/pnp.ids`) — unused because the
+    `dependency('hwdata')` lookup "succeeds" first, then gets the same
+    sysroot-mangling treatment. `distro/src/stages/fetch.rs` now patches
+    this file on every fetch (idempotently, same pattern as the existing
+    uutils `AT_EXECFN` patch, §4) to always take that branch.
+
+  A fourth, unrelated bug surfaced in the same round of testing:
+  `meson setup` refuses to reconfigure an already-configured `build/`
+  directory, and fails outright — not just warns — if that directory was
+  last configured by an older meson than is now on `PATH` (exactly what
+  happened switching to pip's meson mid-project). `meson_build_and_install`
+  now removes any existing `build/` before reconfiguring.
+]
+
+#callout(kind: "ok", "Verified")[
+  The rebuilt image — kernel with `CONFIG_DRM_VIRTIO_GPU=y`, libdrm, and
+  Mesa's `libEGL`/`libGLESv2`/`libgbm`/`libgallium-26.2.2.so` all present
+  in the rootfs — still boots cleanly through the same checks as every
+  earlier milestone: `login: root` → `-bash-5.2#` → `dbus-send` returns a
+  real reply → `udevadm info` returns a populated device entry. No
+  regression from Phase 2. Nothing yet *exercises* the new graphics
+  libraries — that's the rest of Phase 3's own milestone (a minimal
+  Wayland client rendering via virtio-gpu, which needs a compositor to
+  host it, not yet built) — so this is "builds, installs, and boots
+  cleanly," the same honest bar Phase 2's Wayland-core libraries table
+  (§6) was held to.
+]
 
 = How It's Actually Built
 
@@ -413,7 +528,7 @@ The dependency order between them is also the build order: `wayland` first
 `distro.toml` is not one monolithic struct. `distro`'s `Config` composes the
 pieces that are genuinely identical to `distroless` (`KernelConfig`,
 `ImageConfig`, `UutilsConfig`, all from `builder-core`) with a `[section]`
-per package in §4–6 — each just a `version` and a source `url`, plus one
+per package in §4–7 — each just a `version` and a source `url`, plus one
 `build_dir()` helper method per package computing exactly where its tarball
 extracts to.
 
@@ -424,7 +539,7 @@ extracts to.
 distro fetch                    # download + extract every source tarball
 distro build-toolchain          # apt-get the host build tools (once)
 distro build-kernel              # builder-core, unchanged from distroless
-distro build-userland            # every package in §4, §5, and §6
+distro build-userland            # every package in §4 through §7
 distro assemble-rootfs           # merge it all into build-distro/rootfs
 distro make-image                # partition + GRUB + write the disk image
 distro test-qemu [--window]      # boot it
@@ -433,23 +548,26 @@ distro all                       # the whole pipeline, in order
 ```
 ]
 
-`build-userland` is where §4–6's packages actually compile — each package
+`build-userland` is where §4–7's packages actually compile — each package
 gets its own `build_<name>` function in `distro/src/stages/userland.rs`,
 called in dependency order. `assemble-rootfs` then builds the actual root
 filesystem tree: coreutils and its applet symlinks, bash, the §4 static
-binaries, the §5–6 dynamic ones (via the sysroot, below), the host's own
-`libc.so.6`/`libexpat.so.1`/`libm.so.6` and dynamic linker (confirmed via
-`ld-linux-x86-64.so.2 --help` to already be on glibc's default search path
-here — no `ldconfig` step needed), `distro-init` itself as `/sbin/init`, and
-`/etc/passwd`+`/etc/shadow`.
+binaries, the §5–7 dynamic ones (via the sysroot, below), the host's own
+`libc.so.6`/`libexpat.so.1`/`libm.so.6`/`libgcc_s.so.1`/`libstdc++.so.6`/
+`libz.so.1`/`libzstd.so.1`/`libffi.so.8` (the list has grown package by
+package — `libffi` turned out to be a latent gap since Phase 2's
+`libwayland-client`, just never caught until Mesa's EGL exercised it too)
+and the dynamic linker (confirmed via `ld-linux-x86-64.so.2 --help` to
+already be on glibc's default search path here — no `ldconfig` step
+needed), `distro-init` itself as `/sbin/init`, and `/etc/passwd`+`/etc/shadow`.
 
-== The sysroot: how packages in §5–6 find each other
+== The sysroot: how packages in §5–7 find each other
 
 Phase 1's five packages never needed each other at build time — each just
-needed the host's gcc. §5–6's packages do: `wayland-protocols` needs
+needed the host's gcc. §5–7's packages do: `wayland-protocols` needs
 `wayland-scanner` on `PATH` at its own build time, and `libinput` needs
 `eudev`'s installed `libudev.pc` to link against `libudev` at all. Every
-package in §5–6 is therefore built with `--prefix=/usr` (its normal, final,
+package in §5–7 is therefore built with `--prefix=/usr` (its normal, final,
 "as if genuinely installed" prefix) and installed with
 `DESTDIR=<build-distro/sysroot>` — files physically land under the sysroot,
 but the package's own compiled-in idea of its prefix stays `/usr`, which
@@ -503,7 +621,7 @@ echoed after each command — rather than fixed sleeps.
 = What Isn't Part of the Picture Yet
 
 #spec(
-  ("Phase 3", [Graphics, scoped first to QEMU's `virtio-gpu`: Mesa, built against §6's libraries.]),
+  ("Phase 3", [*Half done* — §7's libdrm/Mesa build against §6's libraries is finished; still ahead: a minimal Wayland client actually rendering something via `virtio-gpu`, which needs a compositor to host it.]),
   ("Phase 4", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …).]),
   ("Phase 5", [COSMIC itself — `cosmic-comp`, `cosmic-session`, `cosmic-panel`, `cosmic-greeter`, minimal subset first.]),
   ("Phase 6", [Expand: more COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
