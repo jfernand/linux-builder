@@ -24,6 +24,21 @@ fn sysroot_abs(ctx: &BuildCtx) -> Result<PathBuf> {
 /// during Phase 2/3), and prepends the sysroot's `bin`/`sbin` (plus
 /// `~/.local/bin`, for Mesa's pip-installed newer meson) to `PATH`.
 /// Applied to every meson/configure/ninja/make invocation.
+///
+/// Deliberately does NOT set `PKG_CONFIG_LIBDIR` to exclude pkg-config's
+/// host default search path — that was tried, and it broke a real,
+/// legitimate case: `wayland-server` (already built by the old pipeline)
+/// needs `libffi`, which — like glibc itself — this project deliberately
+/// never builds from source, relying on the host's copy instead
+/// (`HOST_DYNAMIC_LIBS` already copies `libffi.so.8` for the same reason).
+/// Excluding the host search path made that legitimate host dependency
+/// unfindable. The tradeoff this leaves in place: an unwanted *optional*
+/// host package (pango, glib, ...) can still be "found" via pkg-config's
+/// default search and then have its paths incorrectly mangled by
+/// `PKG_CONFIG_SYSROOT_DIR` — handled the same way this bug class has
+/// been handled every other time it's appeared (Mesa's spirv-tools,
+/// libxkbcommon's xkbregistry, weston's own cairo build): an explicit
+/// per-package disable once actually hit, not a blanket search restriction.
 pub fn sysroot_env(ctx: &BuildCtx, cmd: &mut Command) -> Result<()> {
     let sysroot = sysroot_abs(ctx)?;
     let pkg_config_path = format!(
@@ -139,17 +154,18 @@ pub fn default_fetch<T: Buildpack + ?Sized>(bp: &T, ctx: &BuildCtx, force: bool)
             Source::Tarball { archive_name, extracted_dir_name, url } => {
                 let extracted_dir = ctx.sources_dir.join(extracted_dir_name);
                 if !already_built(&extracted_dir, force) {
-                    let archive = ctx.sources_dir.join(archive_name);
-                    if !archive.exists() {
+                    let archive_abs = ctx.sources_dir.join(archive_name);
+                    if !archive_abs.exists() {
+                        // Args are relative to sources_dir, since run_in
+                        // sets that as the child process's cwd — passing
+                        // the already sources_dir-joined path here would
+                        // double it up (sources_dir/sources_dir/...).
                         run_in(
                             &ctx.sources_dir,
-                            Command::new("wget").arg("-O").arg(&archive).arg(url),
+                            Command::new("wget").arg("-O").arg(archive_name).arg(url),
                         )?;
                     }
-                    run_in(
-                        &ctx.sources_dir,
-                        Command::new("tar").arg("-xf").arg(&archive),
-                    )?;
+                    run_in(&ctx.sources_dir, Command::new("tar").arg("-xf").arg(archive_name))?;
                 }
                 extracted_dir
             }
