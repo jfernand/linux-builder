@@ -45,6 +45,13 @@ pub struct BashConfig {
 pub struct UtilLinuxConfig {
     pub version: String,
     pub url: String,
+    /// By default only agetty/mount/umount are built (all Phase 1 needs).
+    /// Set true to build the rest of util-linux's ~120 programs (lsblk,
+    /// fdisk, blkid, findmnt, swapon, wipefs, ...) statically too — off by
+    /// default to keep the minimal-base philosophy, opt-in the same way
+    /// the kernel's FEATURE_PACKS are.
+    #[serde(default)]
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
