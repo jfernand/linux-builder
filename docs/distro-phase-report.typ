@@ -830,9 +830,51 @@ inside QEMU (§7.1) before its own cutover even happened.
   pipeline was rebuilt without rebuilding a single package.
 ]
 
-`distroless` (busybox, and its own copy of uutils) stays on the old
-`builder-core` pipeline for now — a separate crate with its own `main.rs`
-and config shape, migrating on its own schedule, not part of this pass.
+`distroless` has since migrated too, reusing the same `buildpack-core`/
+`buildpacks` crates rather than a second implementation. Its kernel and
+uutils are the literal same buildpacks `distro` uses — uutils gained a
+`UutilsVariant` (`Glibc`/`Musl`) field since the two distros need
+genuinely different target triples, cargo feature sets, and
+static-linking mechanisms, but everything else about the package (source,
+patch, applet list, install shape) is identical, so it stayed one
+buildpack rather than splitting into two. Busybox is new: `allnoconfig`,
+then a curated applet list patched directly into the generated `.config`
+text, then `make CC=<musl-gcc with -idirafter fallbacks>` — `CC` has to be
+a make-time argument rather than an environment variable, since BusyBox's
+own Makefile unconditionally overwrites it. `distroless/src/pipeline.rs`
+mirrors `distro/src/stages/buildpacks.rs` at its own (much smaller) scale;
+`distroless/src/rootfs.rs` keeps the genuinely distro-specific,
+non-buildpack assembly logic (inittab/passwd/fstab, the udhcpc script,
+kernel module install) that has no `distro` equivalent. The migration
+also surfaced a real, previously-unnoticed gap: `distroless`'s uutils had
+never had the AT_EXECFN empty-fallback patch applied — the old
+`builder-core` pipeline had no patch mechanism at all — unlike `distro`'s
+uutils, which always carried it. Reusing the shared buildpack fixed this
+for `distroless` for the first time. `distroless`'s TUI needed zero
+changes: it re-execs the same CLI subcommands and its stage output-path
+checks already point at the same on-disk locations the migrated
+buildpacks' `ctx_for` overrides target.
+
+#callout(kind: "ok", "Verified")[
+  A scripted QEMU boot of the migrated `distroless` reaches its login
+  prompt, logs in via busybox ash, and reports `ls /bin | wc -l` as 44 and
+  a correct `uname -a` — the full rebuild-free pipeline works end to end,
+  same as `distro`'s own cutover above.
+]
+
+Every real build run (for either distro) now also writes a Graphviz SVG
+of the buildpack dependency graph (`dependency-graph.svg`, next to the
+rest of that distro's build output) via `buildpack_core::graph::write_svg`
+— one node per buildpack, one edge per declared dependency, generated
+fresh on every `build-userland` run rather than by request. A buildpack
+with more than one output (`shadow`'s login/passwd binaries, `weston`'s
+three) gets each output's description as an extra label line rather than
+collapsing to just the package name; `util-linux`'s outputs carry the
+real scanned binary name (`agetty`, `mount`, `umount`, or every binary
+`full` mode finds) instead of a generic "util-linux binary" placeholder,
+which needed `BuildOutput.description` to move from `&'static str` to an
+owned `String` so it could be built at runtime instead of picked from a
+fixed literal.
 
 #callout(kind: "trap", "A regression from trying to fix a bug class, not an instance")[
   `sysroot_env` briefly set `PKG_CONFIG_LIBDIR` (which replaces
