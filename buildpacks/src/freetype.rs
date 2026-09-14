@@ -91,7 +91,7 @@ impl Buildpack for Freetype {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "freetype2.pc (sysroot marker)",
+            description: "freetype2.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/freetype2.pc"),
             rootfs_install: None,
         }]

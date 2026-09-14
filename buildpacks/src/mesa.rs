@@ -106,7 +106,7 @@ impl Buildpack for Mesa {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libEGL_mesa.so (sysroot marker)",
+            description: "libEGL_mesa.so (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/libEGL_mesa.so"),
             rootfs_install: None, // Sysroot mode: bulk-copied, not installed individually
         }]

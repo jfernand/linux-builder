@@ -85,7 +85,7 @@ impl Buildpack for LibdisplayInfo {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libdisplay-info.pc (sysroot marker)",
+            description: "libdisplay-info.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libdisplay-info.pc"),
             rootfs_install: None,
         }]

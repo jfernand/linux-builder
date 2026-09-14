@@ -135,7 +135,7 @@ impl Buildpack for UtilLinux {
             return [("agetty", "sbin"), ("mount", "bin"), ("umount", "bin")]
                 .into_iter()
                 .map(|(name, dest_dir)| BuildOutput {
-                    description: "util-linux binary",
+                    description: name.to_string(),
                     path: dir.join(name),
                     rootfs_install: Some(RootfsInstall {
                         dest: PathBuf::from(dest_dir).join(name),
@@ -160,7 +160,7 @@ impl Buildpack for UtilLinux {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();
                 let dest_dir = if name == "agetty" { "sbin" } else { "bin" };
                 BuildOutput {
-                    description: "util-linux binary",
+                    description: name.clone(),
                     path: p,
                     rootfs_install: Some(RootfsInstall {
                         dest: PathBuf::from(dest_dir).join(&name),

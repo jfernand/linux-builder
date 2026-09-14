@@ -76,7 +76,7 @@ impl Buildpack for DistroInit {
 
     fn outputs(&self, _ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "distro-init binary",
+            description: "distro-init binary".to_string(),
             path: self.binary_path(),
             rootfs_install: Some(RootfsInstall { dest: PathBuf::from("sbin/init"), symlinks: vec![] }),
         }]

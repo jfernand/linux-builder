@@ -86,7 +86,7 @@ impl Buildpack for Fontconfig {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "fontconfig.pc (sysroot marker)",
+            description: "fontconfig.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/fontconfig.pc"),
             rootfs_install: None,
         }]

@@ -83,7 +83,7 @@ impl Buildpack for Zlib {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "zlib.pc (sysroot marker)",
+            description: "zlib.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/zlib.pc"),
             rootfs_install: None,
         }]

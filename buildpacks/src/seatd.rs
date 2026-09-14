@@ -89,7 +89,7 @@ impl Buildpack for Seatd {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libseat.pc (sysroot marker)",
+            description: "libseat.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libseat.pc"),
             rootfs_install: None,
         }]

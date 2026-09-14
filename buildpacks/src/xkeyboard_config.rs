@@ -83,7 +83,7 @@ impl Buildpack for XkeyboardConfig {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "base.lst (sysroot marker)",
+            description: "base.lst (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/share/X11/xkb/rules/base.lst"),
             rootfs_install: None,
         }]

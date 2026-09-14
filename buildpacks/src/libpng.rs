@@ -76,7 +76,7 @@ impl Buildpack for Libpng {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libpng.pc (sysroot marker)",
+            description: "libpng.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libpng16.pc"),
             rootfs_install: None,
         }]

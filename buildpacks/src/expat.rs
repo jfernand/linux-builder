@@ -85,7 +85,7 @@ impl Buildpack for Expat {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "expat.pc (sysroot marker)",
+            description: "expat.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/expat.pc"),
             rootfs_install: None,
         }]

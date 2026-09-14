@@ -140,17 +140,17 @@ impl Buildpack for Weston {
         // usr/bin, not libexecdir).
         vec![
             BuildOutput {
-                description: "libweston-16.pc (sysroot marker)",
+                description: "libweston-16.pc (sysroot marker)".to_string(),
                 path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libweston-16.pc"),
                 rootfs_install: None,
             },
             BuildOutput {
-                description: "weston compositor binary",
+                description: "weston compositor binary".to_string(),
                 path: ctx.sysroot_dir.join("usr/bin/weston"),
                 rootfs_install: None,
             },
             BuildOutput {
-                description: "weston-simple-egl demo client",
+                description: "weston-simple-egl demo client".to_string(),
                 path: ctx.sysroot_dir.join("usr/bin/weston-simple-egl"),
                 rootfs_install: None,
             },

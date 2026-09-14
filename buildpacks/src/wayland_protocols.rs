@@ -77,7 +77,7 @@ impl Buildpack for WaylandProtocols {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "wayland-protocols.pc (sysroot marker)",
+            description: "wayland-protocols.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/share/pkgconfig/wayland-protocols.pc"),
             rootfs_install: None,
         }]

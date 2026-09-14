@@ -105,7 +105,7 @@ impl Buildpack for Libdrm {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libdrm.pc (sysroot marker)",
+            description: "libdrm.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libdrm.pc"),
             rootfs_install: None,
         }]

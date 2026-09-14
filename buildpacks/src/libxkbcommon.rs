@@ -92,7 +92,7 @@ impl Buildpack for Libxkbcommon {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "xkbcommon.pc (sysroot marker)",
+            description: "xkbcommon.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/xkbcommon.pc"),
             rootfs_install: None,
         }]

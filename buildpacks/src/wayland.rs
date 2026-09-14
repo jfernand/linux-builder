@@ -85,7 +85,7 @@ impl Buildpack for Wayland {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "wayland-client.pc (sysroot marker)",
+            description: "wayland-client.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/wayland-client.pc"),
             rootfs_install: None,
         }]

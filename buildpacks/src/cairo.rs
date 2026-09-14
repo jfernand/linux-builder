@@ -101,7 +101,7 @@ impl Buildpack for Cairo {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "cairo.pc (sysroot marker)",
+            description: "cairo.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/cairo.pc"),
             rootfs_install: None,
         }]

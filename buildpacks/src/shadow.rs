@@ -94,7 +94,7 @@ impl Buildpack for Shadow {
         let dir = self.build_dir(ctx);
         vec![
             BuildOutput {
-                description: "login binary",
+                description: "login binary".to_string(),
                 path: dir.join("src").join("login"),
                 rootfs_install: Some(RootfsInstall {
                     dest: PathBuf::from("bin/login"),
@@ -102,7 +102,7 @@ impl Buildpack for Shadow {
                 }),
             },
             BuildOutput {
-                description: "passwd binary",
+                description: "passwd binary".to_string(),
                 path: dir.join("src").join("passwd"),
                 rootfs_install: Some(RootfsInstall {
                     dest: PathBuf::from("bin/passwd"),

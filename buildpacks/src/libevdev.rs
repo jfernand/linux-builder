@@ -76,7 +76,7 @@ impl Buildpack for Libevdev {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libevdev.pc (sysroot marker)",
+            description: "libevdev.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libevdev.pc"),
             rootfs_install: None,
         }]

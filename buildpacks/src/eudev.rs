@@ -92,7 +92,7 @@ impl Buildpack for Eudev {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libudev.pc (sysroot marker)",
+            description: "libudev.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libudev.pc"),
             rootfs_install: None,
         }]

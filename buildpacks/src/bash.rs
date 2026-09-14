@@ -83,7 +83,7 @@ impl Buildpack for Bash {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "bash binary",
+            description: "bash binary".to_string(),
             path: self.build_dir(ctx).join("bash"),
             rootfs_install: Some(RootfsInstall {
                 dest: PathBuf::from("bin/bash"),

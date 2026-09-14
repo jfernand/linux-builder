@@ -97,7 +97,7 @@ impl Buildpack for Dbus {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "dbus-1.pc (sysroot marker)",
+            description: "dbus-1.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/dbus-1.pc"),
             rootfs_install: None,
         }]

@@ -82,7 +82,7 @@ impl Buildpack for Pixman {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "pixman-1.pc (sysroot marker)",
+            description: "pixman-1.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/pixman-1.pc"),
             rootfs_install: None,
         }]

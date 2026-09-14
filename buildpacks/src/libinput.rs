@@ -90,7 +90,7 @@ impl Buildpack for Libinput {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "libinput.pc (sysroot marker)",
+            description: "libinput.pc (sysroot marker)".to_string(),
             path: ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/libinput.pc"),
             rootfs_install: None,
         }]

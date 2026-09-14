@@ -184,7 +184,7 @@ impl Buildpack for Kernel {
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {
         vec![BuildOutput {
-            description: "bzImage",
+            description: "bzImage".to_string(),
             path: self.build_dir(ctx).join("arch/x86/boot/bzImage"),
             rootfs_install: None, // copied directly by make_image, not the rootfs stage
         }]
