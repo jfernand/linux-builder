@@ -1,0 +1,179 @@
+//! Shared build-system helpers, ported near-verbatim from
+//! `distro/src/stages/userland.rs`'s `meson_build_and_install`/
+//! `autotools_build_and_install`/`sysroot_env`. Deliberately plain
+//! functions, not a `BuildSystem` sub-trait — see the plan file's "No
+//! BuildSystem sub-trait" note for why.
+
+use crate::run::{already_built, run_in};
+use crate::{Buildpack, BuildCtx, Source};
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub fn num_cpus() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
+
+fn sysroot_abs(ctx: &BuildCtx) -> Result<PathBuf> {
+    Ok(std::env::current_dir().context("getting current directory")?.join(&ctx.sysroot_dir))
+}
+
+/// Points `PKG_CONFIG_PATH`/`PKG_CONFIG_SYSROOT_DIR` at the shared sysroot
+/// so one package's build can find an earlier one, forces the system
+/// pkg-config (dodges a Homebrew-pkgconfig-leak bug class hit repeatedly
+/// during Phase 2/3), and prepends the sysroot's `bin`/`sbin` (plus
+/// `~/.local/bin`, for Mesa's pip-installed newer meson) to `PATH`.
+/// Applied to every meson/configure/ninja/make invocation.
+pub fn sysroot_env(ctx: &BuildCtx, cmd: &mut Command) -> Result<()> {
+    let sysroot = sysroot_abs(ctx)?;
+    let pkg_config_path = format!(
+        "{}:{}",
+        sysroot.join("usr/lib/x86_64-linux-gnu/pkgconfig").display(),
+        sysroot.join("usr/share/pkgconfig").display(),
+    );
+    let local_bin = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".local/bin"))
+        .filter(|p| p.exists())
+        .map(|p| format!("{}:", p.display()))
+        .unwrap_or_default();
+    let path = format!(
+        "{local_bin}{}:{}:{}",
+        sysroot.join("usr/bin").display(),
+        sysroot.join("usr/sbin").display(),
+        std::env::var("PATH").unwrap_or_default(),
+    );
+    cmd.env("PKG_CONFIG_PATH", pkg_config_path)
+        .env("PKG_CONFIG_SYSROOT_DIR", &sysroot)
+        .env("PKG_CONFIG", "/usr/bin/pkg-config")
+        .env("PATH", path);
+    Ok(())
+}
+
+pub fn meson_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&str]) -> Result<()> {
+    let destdir = sysroot_abs(ctx)?;
+
+    let build_dir = dir.join("build");
+    if build_dir.exists() {
+        std::fs::remove_dir_all(&build_dir)
+            .with_context(|| format!("removing stale build dir {}", build_dir.display()))?;
+    }
+
+    let mut setup = Command::new("meson");
+    setup.arg("setup").arg("build").arg("--prefix=/usr").args(extra_args);
+    sysroot_env(ctx, &mut setup)?;
+    run_in(dir, &mut setup)?;
+
+    let mut build = Command::new("ninja");
+    build.arg("-C").arg("build");
+    sysroot_env(ctx, &mut build)?;
+    run_in(dir, &mut build)?;
+
+    let mut install = Command::new("ninja");
+    install.arg("-C").arg("build").arg("install");
+    sysroot_env(ctx, &mut install)?;
+    install.env("DESTDIR", destdir);
+    run_in(dir, &mut install)?;
+
+    Ok(())
+}
+
+pub fn autotools_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&str]) -> Result<()> {
+    let destdir = sysroot_abs(ctx)?;
+    let mut configure = Command::new("sh");
+    configure.arg("configure").arg("--prefix=/usr").args(extra_args);
+    sysroot_env(ctx, &mut configure)?;
+    run_in(dir, &mut configure)?;
+
+    let mut make = Command::new("make");
+    make.arg(format!("-j{}", num_cpus()));
+    sysroot_env(ctx, &mut make)?;
+    run_in(dir, &mut make)?;
+
+    let mut install = Command::new("make");
+    install.arg("install");
+    sysroot_env(ctx, &mut install)?;
+    install.env("DESTDIR", destdir);
+    run_in(dir, &mut install)
+}
+
+/// `configure`/`make`-based build with no DESTDIR/sysroot install step —
+/// for `StaticArtifacts` packages (bash, util-linux, shadow) that just
+/// produce a standalone static binary in-place, consumed later by an
+/// explicit rootfs copy rather than installed via DESTDIR.
+///
+/// `make_vars` are passed as `make`-time command-line variable
+/// assignments (e.g. `LDFLAGS=-all-static`), NOT as configure-time env —
+/// libtool's fully-static flag has to be make-time: configure's own
+/// compiler sanity check calls gcc directly, before libtool is set up to
+/// translate the flag, so gcc itself rejects it as invalid ("C compiler
+/// cannot create executables") if it's set that early.
+pub fn autotools_build_static(dir: &Path, extra_args: &[&str], make_vars: &[(&str, &str)]) -> Result<()> {
+    let mut configure = Command::new("sh");
+    configure.arg("configure").args(extra_args);
+    run_in(dir, &mut configure)?;
+
+    let mut make = Command::new("make");
+    make.arg(format!("-j{}", num_cpus()));
+    for (k, v) in make_vars {
+        make.arg(format!("{k}={v}"));
+    }
+    run_in(dir, &mut make)
+}
+
+pub fn cargo_build_release(dir: &Path, target: &str, extra_args: &[&str], env: &[(&str, &str)]) -> Result<()> {
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "--release", "--target", target]).args(extra_args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    run_in(dir, &mut cmd)
+}
+
+/// Generic tarball/git fetch+extract+patch, used as `Buildpack::fetch`'s
+/// default implementation.
+pub fn default_fetch<T: Buildpack + ?Sized>(bp: &T, ctx: &BuildCtx, force: bool) -> Result<()> {
+    std::fs::create_dir_all(&ctx.sources_dir).context("creating sources dir")?;
+
+    for source in bp.sources(ctx) {
+        let extracted_dir = match &source {
+            Source::Tarball { archive_name, extracted_dir_name, url } => {
+                let extracted_dir = ctx.sources_dir.join(extracted_dir_name);
+                if !already_built(&extracted_dir, force) {
+                    let archive = ctx.sources_dir.join(archive_name);
+                    if !archive.exists() {
+                        run_in(
+                            &ctx.sources_dir,
+                            Command::new("wget").arg("-O").arg(&archive).arg(url),
+                        )?;
+                    }
+                    run_in(
+                        &ctx.sources_dir,
+                        Command::new("tar").arg("-xf").arg(&archive),
+                    )?;
+                }
+                extracted_dir
+            }
+            Source::Git { url, rev, checkout_dir_name } => {
+                let dir = ctx.sources_dir.join(checkout_dir_name);
+                if !already_built(&dir.join(".git"), force) {
+                    if !dir.exists() {
+                        run_in(
+                            &ctx.sources_dir,
+                            Command::new("git").arg("clone").arg(url).arg(checkout_dir_name),
+                        )?;
+                    }
+                    run_in(&dir, Command::new("git").arg("checkout").arg(rev))?;
+                }
+                dir
+            }
+            Source::InTree => continue,
+        };
+
+        for patch in bp.patches(ctx) {
+            (patch.apply)(&extracted_dir)
+                .with_context(|| format!("applying patch: {}", patch.description))?;
+        }
+    }
+
+    Ok(())
+}
