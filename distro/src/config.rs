@@ -16,6 +16,8 @@ pub struct Config {
     pub bash: BashConfig,
     pub util_linux: UtilLinuxConfig,
     pub shadow: ShadowConfig,
+    pub seatd: SeatdConfig,
+    pub dbus: DbusConfig,
     pub image: ImageConfig,
     #[serde(default = "default_build_dir")]
     pub build_dir: PathBuf,
@@ -37,6 +39,18 @@ pub struct UtilLinuxConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ShadowConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SeatdConfig {
+    pub version: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DbusConfig {
     pub version: String,
     pub url: String,
 }
@@ -88,6 +102,14 @@ impl Config {
 
     pub fn shadow_build_dir(&self) -> PathBuf {
         self.build_dir.join("shadow").join(format!("shadow-{}", self.shadow.version))
+    }
+
+    pub fn seatd_build_dir(&self) -> PathBuf {
+        self.build_dir.join("seatd").join(format!("seatd-{}", self.seatd.version))
+    }
+
+    pub fn dbus_build_dir(&self) -> PathBuf {
+        self.build_dir.join("dbus").join(format!("dbus-{}", self.dbus.version))
     }
 
     pub fn rootfs_dir(&self) -> PathBuf {

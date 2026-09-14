@@ -21,6 +21,14 @@ url = "https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.41/util-lin
 version = "4.17.4"
 url = "https://github.com/shadow-maint/shadow/releases/download/4.17.4/shadow-4.17.4.tar.xz"
 
+[seatd]
+version = "0.9.3"
+url = "https://git.sr.ht/~kennylevinsen/seatd/archive/0.9.3.tar.gz"
+
+[dbus]
+version = "1.16.2"
+url = "https://dbus.freedesktop.org/releases/dbus/dbus-1.16.2.tar.xz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048
