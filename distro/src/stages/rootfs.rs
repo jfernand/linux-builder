@@ -102,10 +102,49 @@ fn install_bash(cfg: &Config, root: &Path) -> Result<()> {
 }
 
 fn install_util_linux(cfg: &Config, root: &Path) -> Result<()> {
+    if cfg.util_linux.full {
+        return install_util_linux_full(cfg, root);
+    }
+
     copy_binary(&agetty_binary_path(cfg), &root.join("sbin/agetty"))?;
     copy_binary(&mount_binary_path(cfg), &root.join("bin/mount"))?;
     copy_binary(&umount_binary_path(cfg), &root.join("bin/umount"))?;
     Ok(())
+}
+
+/// With `util_linux.full`, install every program the build produced (~121
+/// binaries: agetty/mount/umount plus lsblk, fdisk, blkid, findmnt, swapon,
+/// wipefs, ...) instead of just the three Phase 1 needs. util-linux's
+/// autotools build places every program flat in the top level of the build
+/// directory regardless of which source subdir (sys-utils/, disk-utils/,
+/// ...) it came from, so a non-recursive scan of that one directory finds
+/// them all. Filtered by ELF magic bytes rather than the executable bit
+/// alone, since that same top level also holds executable *shell scripts*
+/// (configure, config.status, libtool) that aren't programs to ship.
+fn install_util_linux_full(cfg: &Config, root: &Path) -> Result<()> {
+    let dir = cfg.util_linux_build_dir();
+    for entry in fs::read_dir(&dir).with_context(|| format!("reading dir {}", dir.display()))? {
+        let path = entry?.path();
+        if !path.is_file() || !is_executable(&path) || !is_elf(&path)? {
+            continue;
+        }
+
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let dest_dir = if name == "agetty" { "sbin" } else { "bin" };
+        copy_binary(&path, &root.join(dest_dir).join(&name))?;
+    }
+    Ok(())
+}
+
+fn is_executable(path: &Path) -> bool {
+    fs::metadata(path).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+}
+
+fn is_elf(path: &Path) -> Result<bool> {
+    use std::io::Read;
+    let mut buf = [0u8; 4];
+    let mut f = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    Ok(f.read(&mut buf)? == 4 && buf == *b"\x7fELF")
 }
 
 fn install_shadow(cfg: &Config, root: &Path) -> Result<()> {

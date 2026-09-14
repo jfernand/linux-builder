@@ -17,6 +17,10 @@ url = "https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz"
 [util_linux]
 version = "2.41.2"
 url = "https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.41/util-linux-2.41.2.tar.xz"
+# Off by default: only agetty/mount/umount are built (all Phase 1 needs).
+# Set true to build and install the rest of util-linux's ~120 programs too
+# (lsblk, fdisk, blkid, findmnt, swapon, wipefs, ...), statically.
+# full = true
 
 [shadow]
 version = "4.17.4"
@@ -51,8 +55,8 @@ version = "0.46.4"
 url = "https://gitlab.freedesktop.org/pixman/pixman/-/archive/pixman-0.46.4/pixman-pixman-0.46.4.tar.gz"
 
 [libdisplay_info]
-version = "0.4.0"
-url = "https://gitlab.freedesktop.org/-/project/14497/uploads/289d58230e2981b51f23d31faf25bef9/libdisplay-info-0.4.0.tar.xz"
+version = "0.3.0"
+url = "https://gitlab.freedesktop.org/-/project/14497/uploads/a7e427e2c5ef474032a87459443b7982/libdisplay-info-0.3.0.tar.xz"
 
 [libevdev]
 version = "1.13.7"
