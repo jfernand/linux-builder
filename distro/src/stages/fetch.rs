@@ -122,6 +122,22 @@ pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
         force,
     )?;
 
+    fetch_tarball(
+        cfg,
+        &cfg.libdrm.url,
+        &format!("libdrm-{}.tar.gz", cfg.libdrm.version),
+        &cfg.libdrm_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.mesa.url,
+        &format!("mesa-{}.tar.gz", cfg.mesa.version),
+        &cfg.mesa_build_dir(),
+        force,
+    )?;
+
     fetch_uutils(cfg, force)?;
 
     Ok(())
