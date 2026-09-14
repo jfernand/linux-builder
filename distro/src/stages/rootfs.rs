@@ -55,6 +55,7 @@ pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
     install_shadow(cfg, &root)?;
     install_seatd(cfg, &root)?;
     install_dbus(cfg, &root)?;
+    install_eudev(cfg, &root)?;
     install_dynamic_linker_and_host_libs(&root)?;
     install_init(&root)?;
     write_login_config(&root)?;
@@ -124,6 +125,18 @@ fn install_seatd(cfg: &Config, root: &Path) -> Result<()> {
 
 fn install_dbus(cfg: &Config, root: &Path) -> Result<()> {
     ninja_install(&cfg.dbus_build_dir().join("build"), root)
+}
+
+/// eudev is autotools, not meson, but the same DESTDIR trick applies —
+/// `make install` with DESTDIR set to the rootfs installs udevd, libudev,
+/// and the udev rules/hwdb data files exactly where Phase 3's libinput
+/// will expect to find them.
+fn install_eudev(cfg: &Config, root: &Path) -> Result<()> {
+    let destdir = std::env::current_dir().context("getting current directory")?.join(root);
+    run_in(
+        &cfg.eudev_build_dir(),
+        Command::new("make").arg("install").env("DESTDIR", destdir),
+    )
 }
 
 fn install_dynamic_linker_and_host_libs(root: &Path) -> Result<()> {
