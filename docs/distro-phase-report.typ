@@ -24,7 +24,7 @@
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: a new #cd[Buildpack] trait — all 11 proven packages, including kernel/util-linux/Mesa cut over from the old pipeline, are now what `distro build-userland`/`build-kernel` actually call, one command for all 25 packages — see §8.5]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus all of Phase 3: kernel graphics support, libdrm, Mesa, Weston and its cairo/xkeyboard-config chain, actually running with a client connected and rendering via virtio-gpu inside QEMU — see §7. Also: every one of #cd[distro]'s 25 packages is now a #cd[Buildpack] — the old fetch.rs/userland.rs are gone entirely — see §8.5]),
     ("Not covered", [Phase 4 through Phase 6 — a Rust toolchain on-target, COSMIC itself, real GPU drivers beyond virtio-gpu, audio, networking UI — see §9]),
   ),
 )
@@ -650,18 +650,21 @@ explicitly, bypassing the sysroot-mangled auto-detection.
 `distro.toml` is not one monolithic struct. `distro`'s `Config` composes the
 pieces that are genuinely identical to `distroless` (`KernelConfig`,
 `ImageConfig`, `UutilsConfig`, all from `builder-core`) with a `[section]`
-per package in §4–7 — each just a `version` and a source `url`, plus one
-`build_dir()` helper method per package computing exactly where its tarball
-extracts to.
+per package in §4–7 — each just a `version` and a source `url` (plus
+util-linux's `full` toggle). Since §8.5, `Config` itself no longer knows
+where any package's source extracts to or builds — that naming-convention
+knowledge (including the GitLab/GitHub double-prefix archive quirks, and
+libdrm's literal commit-SHA-suffixed directory name) now lives entirely
+in each package's own buildpack.
 
 == The pipeline, stage by stage
 
 #codepanel(title: "distro's CLI surface (distro/src/cli.rs)")[
 ```
-distro fetch                    # download + extract every source tarball
+distro fetch                    # download + extract every source
 distro build-toolchain          # apt-get the host build tools (once)
-distro build-kernel              # builder-core, unchanged from distroless
-distro build-userland            # every package in §4 through §7
+distro build-kernel              # the kernel buildpack
+distro build-userland            # every other package in §4 through §7
 distro assemble-rootfs           # merge it all into build-distro/rootfs
 distro make-image                # partition + GRUB + write the disk image
 distro test-qemu [--window]      # boot it
@@ -670,18 +673,22 @@ distro all                       # the whole pipeline, in order
 ```
 ]
 
-`build-userland` is where §4–7's packages actually compile — each package
-gets its own `build_<name>` function in `distro/src/stages/userland.rs`,
-called in dependency order. `assemble-rootfs` then builds the actual root
-filesystem tree: coreutils and its applet symlinks, bash, the §4 static
-binaries, the §5–7 dynamic ones (via the sysroot, below), the host's own
-`libc.so.6`/`libexpat.so.1`/`libm.so.6`/`libgcc_s.so.1`/`libstdc++.so.6`/
-`libz.so.1`/`libzstd.so.1`/`libffi.so.8` (the list has grown package by
-package — `libffi` turned out to be a latent gap since Phase 2's
-`libwayland-client`, just never caught until Mesa's EGL exercised it too)
-and the dynamic linker (confirmed via `ld-linux-x86-64.so.2 --help` to
-already be on glibc's default search path here — no `ldconfig` step
-needed), `distro-init` itself as `/sbin/init`, and `/etc/passwd`+`/etc/shadow`.
+Every one of these now runs through the buildpack registry described in
+§8.5, not a hand-written per-stage function — `distro/src/stages/
+{fetch,userland}.rs`, which used to hold that code, are gone entirely.
+`build-userland` fetches and builds every package but the kernel, in
+dependency order; `assemble-rootfs` then copies every `StaticArtifacts`
+package's declared outputs in directly (coreutils and its 33 applet
+symlinks, bash + `bin/sh`, util-linux's `agetty`/`mount`/`umount`,
+shadow's `login`/`passwd`, `distro-init` as `/sbin/init`), bulk-copies the
+whole shared sysroot for every `Sysroot` package in one `cp -a`, then adds
+the host's own `libc.so.6`/`libexpat.so.1`/`libm.so.6`/`libgcc_s.so.1`/
+`libstdc++.so.6`/`libz.so.1`/`libzstd.so.1`/`libffi.so.8` (the list has
+grown package by package — `libffi` turned out to be a latent gap since
+Phase 2's `libwayland-client`, just never caught until Mesa's EGL
+exercised it too) and the dynamic linker (confirmed via
+`ld-linux-x86-64.so.2 --help` to already be on glibc's default search path
+here — no `ldconfig` step needed), plus `/etc/passwd`+`/etc/shadow`.
 
 == The sysroot: how packages in §5–7 find each other
 
@@ -740,9 +747,9 @@ echoed after each command — rather than fixed sleeps.
   same call site cargo itself does.
 ]
 
-== A buildpack architecture, in progress
+== A buildpack architecture
 
-Every package above is defined the same way: a `{version, url}` config
+Every package used to be defined the same way: a `{version, url}` config
 struct plus a `build_dir()` method in `Config`, a fetch call in
 `fetch.rs`, a `build_<name>` function in `userland.rs`, and — for the
 static packages (§4) — an `install_<name>` function in `rootfs.rs`. That
@@ -761,55 +768,71 @@ from its own stage functions).
   ([`buildpacks`], [One implementation per package, in one crate regardless of which distro(s) end up using it — which distro consumes a package isn't a meaningful axis to split crates on.]),
 )
 
-Eleven packages are implemented and verified against the real
-`distro.toml` and the real `build-distro/sysroot` this way so far: the
-kernel (its `FEATURE_PACKS`, §3.2, kept as its own internal mechanism
-rather than becoming buildpacks themselves — they have no source or
-build step of their own), util-linux, Mesa, and the seven-package cairo
-chain (including `xkeyboard-config`) above. *All eleven* are now what
-`distro`'s real CLI actually calls, not proof-of-concept duplicates
-sitting alongside working code: `stages/buildpacks.rs` builds the
-cairo-chain packages (no old-pipeline equivalent at all — pure
-addition) plus util-linux and Mesa (cut over — their old
-`distro/src/stages/userland.rs` implementations are deleted) in
-`topo_order`, right after the old pipeline's own remaining packages;
-`build-kernel`/`menu-config`/`list-features` call the kernel buildpack
-directly, its old `builder_core`-wrapper calls removed too. One command
-(`distro build-userland`, or `distro all`) builds all 25 packages —
-including the once-separate `cargo run -p buildpacks --example
-weston_chain` step, now gone entirely.
+Every one of `distro`'s 25 packages is now a buildpack, and `distro`'s
+real CLI calls every one of them directly — `distro/src/stages/
+{fetch,userland}.rs`, the two files that used to hold this logic, are
+gone entirely, along with `Config`'s \~15 per-package `*_build_dir()`
+methods (that naming-convention knowledge, including the GitLab/GitHub
+double-prefix archive quirks and libdrm's literal commit-SHA-suffixed
+directory name, now lives in each buildpack's own `build_dir()`).
+`stages/buildpacks.rs` is the entire non-kernel pipeline: `all_packages()`
+lists all 24, `ctx_for()` maps each one's id to a `BuildCtx`, and
+`fetch_new_packages`/`build_new_packages`/`install_static_outputs` do
+exactly what their names say, each in `topo_order`. The kernel keeps its
+own dedicated `build-kernel`/`menu-config`/`list-features` commands (its
+`FEATURE_PACKS`, §3.2, stay its own internal mechanism — they have no
+source or build step of their own to be buildpacks about), calling the
+kernel buildpack directly.
 
-Cutting kernel/util-linux/Mesa over needed one real design fix:
-`topo_order` used to hard-error on any declared dependency id not
-present in the registry it was given, but Mesa's *real* dependencies
-(libdrm, wayland, libxkbcommon, pixman, `libdisplay_info`, libinput)
-aren't buildpacks yet — building a deliberate subset of a larger
-pipeline is the normal case, not a registration bug, so an unregistered
-dependency id is now silently treated as already-satisfied rather than
-an error. It also needed each of the three cutover packages to get its
-own `BuildCtx` pointed at its OLD on-disk build location
-(`build_dir/kernel`, `build_dir/util-linux`, `build_dir/mesa` — not the
-shared `build_dir/sources` every other buildpack uses), so the
-already-built kernel/util-linux/Mesa trees already on disk were
-recognized as-is instead of the cutover triggering a redundant rebuild
-— a kernel rebuild in particular being far too expensive to redo
-needlessly. Verified: every one of the 25 packages reports "already
-exists" on a rebuild, zero wasted work, and a full QEMU regression
-boot (login, `dbus-send`, `udevadm`) still passes exactly as before
-the cutover. This needed no rootfs-side wiring for the cairo chain at
-all: `assemble-rootfs`'s existing `install_sysroot` (`cp -a` of the
-whole shared sysroot) already picks up whatever landed there,
-regardless of which code built it — exactly how Weston ended up
-actually running inside QEMU (§7.1). util-linux, being a
-`StaticArtifacts` package, *did* need `rootfs.rs`'s
-`install_util_linux` rewritten to call the buildpack's own
-`outputs()` instead of duplicating the full/minimal branch and
-ELF-scan logic locally — now one implementation, not two.
+Cutting the *first* three packages over (kernel, util-linux, Mesa) needed
+two real design fixes, both still load-bearing now that all 25 packages
+are migrated:
 
-The remaining ~16 packages (bash, shadow, seatd, dbus, eudev, wayland,
-wayland-protocols, libxkbcommon, pixman, libdisplay-info, libevdev,
-libinput, libdrm, uutils, plus `distroless`'s own busybox) stay on the
-old pipeline for now, migrating on their own schedule.
+- `topo_order` used to hard-error on any declared dependency id not
+  present in the registry it was given. Mesa's *real* dependencies
+  (libdrm, wayland, libxkbcommon, pixman, `libdisplay_info`, libinput)
+  weren't buildpacks yet at that point — building a deliberate subset of
+  a larger pipeline is the normal case, not a registration bug — so an
+  unregistered dependency id is silently treated as already-satisfied
+  rather than an error. Once every package migrated, this stopped being
+  a "does it happen to be registered" question and became real: Mesa's
+  and Weston's `dependencies()` now list their full actual dependency
+  sets, and `topo_order` genuinely orders all 25 packages correctly.
+- Every cutover package gets a `BuildCtx` pointed at its OLD on-disk
+  build location (`build_dir/<name>`, not the shared `build_dir/sources`
+  the 8 cairo-chain packages use, which never had an "old location" to
+  match) — so already-built trees on disk are recognized as-is instead
+  of the migration triggering a redundant rebuild. A kernel rebuild in
+  particular is far too expensive to redo needlessly, and `uutils`
+  needed the special case of `sources_dir` = `build_dir` itself (its old
+  `uutils_build_dir()` had no version-numbered subdirectory, just a bare
+  `build_dir/uutils`).
+
+`rootfs.rs`'s five hardcoded `install_coreutils`/`install_bash`/
+`install_util_linux`/`install_shadow`/`install_init` functions are now
+one generic `install_static_outputs`: it iterates every `StaticArtifacts`
+buildpack and copies each declared output plus its symlinks in (uutils'
+33 applet symlinks moved from a `rootfs.rs` constant into the `Uutils`
+buildpack's own `outputs()`, alongside `bash`'s `bin/sh` and shadow's
+`login`/`passwd`). `Sysroot`-mode packages needed no rootfs-side change
+at all, cutover or not: `install_sysroot`'s `cp -a` of the whole shared
+sysroot already picks up whatever any of them left there, regardless of
+which code built it — exactly how Weston ended up actually running
+inside QEMU (§7.1) before its own cutover even happened.
+
+#callout(kind: "ok", "Verified")[
+  `distro fetch`/`build-kernel`/`build-userland` all report every one of
+  the 25 packages "already exists" on a rebuild — zero wasted work.
+  `assemble-rootfs` installs every static binary and its symlinks
+  correctly. A full QEMU regression boot (login, `dbus-send`, `udevadm`)
+  and a Weston sanity check (DRM/EGL/GL still initialize via our own
+  Mesa build) both pass exactly as before the migration — the whole
+  pipeline was rebuilt without rebuilding a single package.
+]
+
+`distroless` (busybox, and its own copy of uutils) stays on the old
+`builder-core` pipeline for now — a separate crate with its own `main.rs`
+and config shape, migrating on its own schedule, not part of this pass.
 
 #callout(kind: "trap", "A regression from trying to fix a bug class, not an instance")[
   `sysroot_env` briefly set `PKG_CONFIG_LIBDIR` (which replaces
@@ -837,9 +860,9 @@ And three deliberate gaps in what's already built, worth knowing about
 rather than discovering later:
 
 - uutils' built feature set does not include `grep` or `sed`, despite both
-  names appearing in `rootfs.rs`'s applet-symlink list — they were never
-  part of coreutils' scope upstream in the first place. The symlinks exist
-  but dangle. Not yet fixed.
+  names appearing in the `Uutils` buildpack's applet-symlink list — they
+  were never part of coreutils' scope upstream in the first place. The
+  symlinks exist but dangle. Not yet fixed.
 - `libxcb` was never built. Its only real consumer on a Wayland-native
   target is XWayland compatibility, not currently planned — three more
   from-source packages (`libxcb`, `libXau`, `libXdmcp`) not worth building
