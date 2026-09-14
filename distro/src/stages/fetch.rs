@@ -65,6 +65,62 @@ pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
         force,
     )?;
 
+    fetch_tarball(
+        cfg,
+        &cfg.wayland.url,
+        &format!("wayland-{}.tar.xz", cfg.wayland.version),
+        &cfg.wayland_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.wayland_protocols.url,
+        &format!("wayland-protocols-{}.tar.xz", cfg.wayland_protocols.version),
+        &cfg.wayland_protocols_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.libxkbcommon.url,
+        &format!("libxkbcommon-{}.tar.gz", cfg.libxkbcommon.version),
+        &cfg.libxkbcommon_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.pixman.url,
+        &format!("pixman-{}.tar.gz", cfg.pixman.version),
+        &cfg.pixman_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.libdisplay_info.url,
+        &format!("libdisplay-info-{}.tar.xz", cfg.libdisplay_info.version),
+        &cfg.libdisplay_info_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.libevdev.url,
+        &format!("libevdev-{}.tar.gz", cfg.libevdev.version),
+        &cfg.libevdev_build_dir(),
+        force,
+    )?;
+
+    fetch_tarball(
+        cfg,
+        &cfg.libinput.url,
+        &format!("libinput-{}.tar.gz", cfg.libinput.version),
+        &cfg.libinput_build_dir(),
+        force,
+    )?;
+
     fetch_uutils(cfg, force)?;
 
     Ok(())
