@@ -10,8 +10,15 @@ use std::process::Command;
 
 /// Returns indices into `packs`, in an order that respects every declared
 /// dependency edge (a dependency's index always precedes its dependents').
-/// Errors if a declared dependency id isn't present in `packs`, or if the
-/// dependency graph has a cycle.
+/// Errors if the dependency graph has a cycle.
+///
+/// A declared dependency id that isn't present in `packs` is silently
+/// treated as external/already-satisfied, not an error — `packs` is often
+/// a deliberate *subset* of the full package set (e.g. Mesa's real
+/// dependencies include libdrm/wayland/libxkbcommon/pixman/
+/// libdisplay_info/libinput, none of which are buildpacks yet; running
+/// just the buildpack-based subset of a larger pipeline is a normal case,
+/// not a registration bug).
 pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
     let index_of: HashMap<&'static str, usize> =
         packs.iter().enumerate().map(|(i, p)| (p.id(), i)).collect();
@@ -23,13 +30,7 @@ pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
 
     for (i, pack) in packs.iter().enumerate() {
         for dep_id in pack.dependencies() {
-            let &dep_idx = index_of.get(dep_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "buildpack '{}' declares unknown dependency '{}'",
-                    pack.id(),
-                    dep_id
-                )
-            })?;
+            let Some(&dep_idx) = index_of.get(dep_id) else { continue };
             adjacency[dep_idx].push(i);
             in_degree[i] += 1;
         }
@@ -184,9 +185,12 @@ mod tests {
     }
 
     #[test]
-    fn unknown_dependency_errors() {
-        let packs = vec![stub("a", &["nonexistent"])];
-        let err = topo_order(&packs).unwrap_err();
-        assert!(err.to_string().contains("unknown dependency"));
+    fn unknown_dependency_is_treated_as_external() {
+        // "b" depends on "nonexistent", which isn't in this registry —
+        // treated as already-satisfied, not an error (see Mesa's real
+        // dependencies() for why this is the normal case, not a bug).
+        let packs = vec![stub("a", &[]), stub("b", &["nonexistent"])];
+        let order = topo_order(&packs).unwrap();
+        assert_eq!(order.len(), 2);
     }
 }
