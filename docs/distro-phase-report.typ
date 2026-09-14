@@ -14,18 +14,18 @@
     compiler toolchain. This report explains how the thing is actually put
     together: what runs first when the machine powers on, what each binary
     and library in the image is for, how they depend on one another, and how
-    the build pipeline turns fifty-odd separate upstream projects into one
+    the build pipeline turns sixty-odd separate upstream projects into one
     disk image. It is organized the way the system itself is layered — kernel,
     init, a static POSIX base, the seat/session daemons, the Wayland-core
-    libraries, and the graphics stack (libdrm, Mesa) — all still waiting for
-    a compositor to actually call into them — rather than as a chronological
-    log of work done.
+    libraries, and the graphics stack (libdrm, Mesa, Weston and its cairo
+    chain) — all built and verified, still waiting to actually be launched
+    — rather than as a chronological log of work done.
   ],
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus Phase 3's build-side half (kernel graphics support, libdrm, Mesa) — see §7]),
-    ("Not covered", [The rest of Phase 3 (a Wayland client actually rendering via virtio-gpu) through Phase 6 — a compositor, GPU drivers, a Rust toolchain on-target, COSMIC itself — see §9]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2, plus Phase 3's build side (kernel graphics support, libdrm, Mesa, and now Weston with its full cairo dependency chain) — see §7. Also: a new #cd[Buildpack] trait, proven against 10 packages but not yet wired into #cd[distro]'s own pipeline — see §8.5]),
+    ("Not covered", [Actually launching Weston and getting a client to render via virtio-gpu, through Phase 6 — GPU drivers beyond virtio-gpu, a Rust toolchain on-target, COSMIC itself — see §9]),
   ),
 )
 
@@ -55,8 +55,8 @@ same way a bootstrap compiler is infrastructure for a self-hosting language.
   ("§ 4", [The static base: coreutils, shell, login — one binary in, no shared-library bookkeeping.]),
   ("§ 5", [The seat/session layer: seatd, dbus, eudev — what each one actually does.]),
   ("§ 6", [The Wayland-core libraries — built, installed, not yet used by anything.]),
-  ("§ 7", [The graphics stack: libdrm, Mesa, and what DRI/Gallium/EGL/GBM actually are.]),
-  ("§ 8", [How it's all actually built: the pipeline, the config file, the sysroot.]),
+  ("§ 7", [The graphics stack: libdrm, Mesa, what DRI/Gallium/EGL/GBM actually are, and Weston's own cairo dependency chain.]),
+  ("§ 8", [How it's all actually built: the pipeline, the config file, the sysroot, and a new buildpack architecture in progress.]),
   ("§ 9", [What isn't part of the picture yet.]),
 )
 
@@ -521,6 +521,75 @@ decision not to build `libxcb` (§9).
   (§6) was held to.
 ]
 
+== Weston, and the cairo chain that blocked it
+
+Weston is the compositor Phase 3's milestone needs to host a client —
+the one piece missing from "a library a compositor can call into" above
+to "a Wayland client actually renders something." Building it turned out
+to need six more from-source packages first, none of them optional:
+weston's own `shared/meson.build` calls `dependency('cairo')` and
+`dependency('libpng')` with no `required: false` — mandatory, not just a
+demo-client extra — for its kiosk-shell window-decoration code.
+
+#dtable(
+  columns: (auto, auto, 1fr),
+  align: (left, left, left),
+  ([Package], [Version], [What it's for]),
+  ([zlib], [1.3.2], [Compression — libpng's and cairo's own dependency.]),
+  ([expat], [2.7.1], [XML parsing — fontconfig's config-file dependency.]),
+  ([libpng], [1.6.44], [PNG images — weston's own unconditional dependency, and cairo's PNG surface backend.]),
+  ([FreeType], [2.13.3], [Font rasterization. harfbuzz/bzip2/brotli/png support all disabled — none are built here, and none are needed for cairo's plain toy-font API.]),
+  ([fontconfig], [2.15.0], [Font matching — FreeType's companion, needed for cairo's font backend to do anything useful. XML config via expat, not libxml2.]),
+  ([cairo], [1.18.2], [2D graphics — weston's mandatory window-decoration dependency. X11/xcb/GL backends disabled (image-surface only, no `libxcb`, §9).]),
+  ([Weston], [16.0.0], [The compositor itself — DRM backend, GL renderer, kiosk shell, `weston-simple-egl` only. Vulkan/X11/Xwayland/systemd/JPEG/WebP/LCMS2/docs/tests all disabled.]),
+)
+
+#callout(kind: "trap", "The same PKG_CONFIG_SYSROOT_DIR limitation, twice more — and one fix that backfired")[
+  Two more instances of the same `PKG_CONFIG_SYSROOT_DIR` design limitation from earlier in this section, plus a lesson from
+  trying to close the whole bug class at once instead of one instance at
+  a time:
+
+  - *weston's own `shared/meson.build`* unconditionally probes for
+    `pango`/`pangocairo`/`fontconfig`/`glib-2.0` (all `required: false`,
+    but with no meson option to skip the probe itself) — this build host
+    has apt-installed `pango`/`glib` dev packages at genuine standard
+    locations, so the probe "succeeds," and `cairo-util.c` ends up
+    `#include <pango/pangocairo.h>` with no real header at the
+    sysroot-rewritten path the compiler was given. None of pango, glib,
+    harfbuzz, or fribidi are built here, and none are actually needed —
+    weston's kiosk-shell decoration works fine on cairo's plain toy-font
+    API. Fixed the same way as the earlier `hwdata` case: an idempotent source
+    patch (`patch_disable_pango`) that forces the probe's own `if` to
+    never fire.
+  - *The tempting "real" fix* — set `PKG_CONFIG_LIBDIR` to only the
+    sysroot's own pkgconfig directories, replacing pkg-config's built-in
+    host search path entirely instead of just prepending to it — closes
+    this whole bug class in one move, and was tried. It broke a
+    different, *legitimate* case instead: `wayland-server` needs `libffi`,
+    which — like glibc itself — this project deliberately never builds
+    from source, relying on the host's copy the same way it already does
+    for the runtime `.so` (§8.2's `HOST_DYNAMIC_LIBS` list). Excluding the
+    host search path made that real dependency unfindable too. Reverted
+    in favor of the established pattern: an explicit per-package disable
+    each time an *unwanted* leak is actually hit, not a blanket
+    restriction that can't distinguish "unwanted optional leak" from
+    "deliberately host-provided dependency."
+]
+
+#callout(kind: "ok", "Verified")[
+  `weston` and `weston-simple-egl` both build and install as genuine
+  dynamically-linked ELF binaries in the sysroot. `readelf -d ... |
+  grep NEEDED` on every new `.so` in the chain — `libweston-16`,
+  `libexec_weston`, `drm-backend.so`, `gl-renderer.so`, `kiosk-shell.so`,
+  and cairo/fontconfig/freetype/libpng/expat/zlib themselves — shows zero
+  leftover host-only runtime dependency: everything resolves to either
+  one of these seven packages, an already-built Phase 2/3 sysroot
+  library, or glibc. Not yet wired into `distro`'s own pipeline or rootfs
+  (§9) — that's the next piece, and Phase 3's actual milestone (a client
+  rendering inside QEMU) still needs a `weston.ini` and a
+  `distro-init` change to launch it.
+]
+
 = How It's Actually Built
 
 == The config file
@@ -618,10 +687,56 @@ echoed after each command — rather than fixed sleeps.
   same call site cargo itself does.
 ]
 
+== A buildpack architecture, in progress
+
+Every package above is defined the same way: a `{version, url}` config
+struct plus a `build_dir()` method in `Config`, a fetch call in
+`fetch.rs`, a `build_<name>` function in `userland.rs`, and — for the
+static packages (§4) — an `install_<name>` function in `rootfs.rs`. That
+smearing of one package's identity across four files stopped scaling once
+`distro` passed \~17 packages, so a new foundational crate,
+`buildpack-core`, defines a `Buildpack` trait instead: one self-contained
+value per package, declaring its own source, dependencies, build
+instructions, and build outputs, plus a description for an eventual
+generic TUI (today only `distroless` has one, hand-maintained separately
+from its own stage functions).
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Crate], [Role]),
+  ([`buildpack-core`], [The trait itself, `graph::topo_order` (a real topological sort over each package's declared dependencies, replacing a hand-maintained call sequence), and the shared meson/autotools/cargo build helpers.]),
+  ([`buildpacks`], [One implementation per package, in one crate regardless of which distro(s) end up using it — which distro consumes a package isn't a meaningful axis to split crates on.]),
+)
+
+Ten packages are implemented and verified against the real `distro.toml`
+and the real `build-distro/sysroot` this way so far: the kernel (its
+`FEATURE_PACKS`, §3.2, kept as its own internal mechanism rather than
+becoming buildpacks themselves — they have no source or build step of
+their own), util-linux, Mesa, and the six-package cairo chain above. None
+of it is wired into `distro`'s real CLI yet — every package above still
+builds through the pipeline this section describes, unchanged, and the
+new buildpacks were built through a standalone verification runner
+(`cargo run -p buildpacks --example weston_chain`) that targets the same
+real sysroot, so nothing gets built twice when the remaining ~17 packages
+eventually migrate too.
+
+#callout(kind: "trap", "A regression from trying to fix a bug class, not an instance")[
+  `sysroot_env` briefly set `PKG_CONFIG_LIBDIR` (which replaces
+  pkg-config's own default search path, rather than just prepending to
+  it) to close the whole "unwanted host package leaks into a sysroot
+  build" bug class in one move. It broke a real case instead —
+  `wayland-server`'s legitimate, deliberately-host-provided `libffi`
+  dependency became unfindable — and was reverted in favor of the
+  established pattern: an explicit per-package fix each time an actual
+  unwanted leak is hit, not a blanket restriction that can't tell "leak"
+  from "genuine host dependency" apart. See the weston/cairo section
+  above for the case that prompted trying it.
+]
+
 = What Isn't Part of the Picture Yet
 
 #spec(
-  ("Phase 3", [*Half done* — §7's libdrm/Mesa build against §6's libraries is finished; still ahead: a minimal Wayland client actually rendering something via `virtio-gpu`, which needs a compositor to host it.]),
+  ("Phase 3", [*Mostly done* — §7's libdrm/Mesa build, and now Weston itself and its full cairo dependency chain, all build and verify cleanly. Still ahead: wiring Weston into `distro`'s own pipeline/rootfs (it currently only builds through a standalone verification runner) and a `weston.ini`/`distro-init` change to actually launch it, so a client renders something inside QEMU.]),
   ("Phase 4", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …).]),
   ("Phase 5", [COSMIC itself — `cosmic-comp`, `cosmic-session`, `cosmic-panel`, `cosmic-greeter`, minimal subset first.]),
   ("Phase 6", [Expand: more COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
