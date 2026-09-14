@@ -10,13 +10,13 @@ use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
-/// Host system libraries our first dynamically-linked binaries (dbus,
-/// seatd) need at runtime but that our own build doesn't produce —
-/// copied straight from the host, since we compile natively against the
-/// host's own glibc (see the config.rs/userland.rs comments on "we are
-/// the distro" via the host toolchain, not a cross one). Extend this list
-/// as later phases (Wayland, libinput, Mesa, ...) pull in more of them.
-const HOST_DYNAMIC_LIBS: &[&str] = &["libc.so.6", "libexpat.so.1"];
+/// Host system libraries our dynamically-linked binaries (dbus, seatd,
+/// libinput, ...) need at runtime but that our own build doesn't produce
+/// — copied straight from the host, since we compile natively against
+/// the host's own glibc (see the config.rs/userland.rs comments on "we
+/// are the distro" via the host toolchain, not a cross one). Extend this
+/// list as later phases (Mesa, ...) pull in more of them.
+const HOST_DYNAMIC_LIBS: &[&str] = &["libc.so.6", "libexpat.so.1", "libm.so.6"];
 const HOST_LIB_DIR: &str = "/lib/x86_64-linux-gnu";
 const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";
 
@@ -53,9 +53,7 @@ pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
     install_bash(cfg, &root)?;
     install_util_linux(cfg, &root)?;
     install_shadow(cfg, &root)?;
-    install_seatd(cfg, &root)?;
-    install_dbus(cfg, &root)?;
-    install_eudev(cfg, &root)?;
+    install_sysroot(cfg, &root)?;
     install_dynamic_linker_and_host_libs(&root)?;
     install_init(&root)?;
     write_login_config(&root)?;
@@ -102,40 +100,24 @@ fn install_shadow(cfg: &Config, root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// seatd and dbus are meson projects, unlike the autotools/uutils tools
-/// above — rather than hand-picking files to copy, `ninja install` with
-/// `DESTDIR` set to the rootfs does the same install meson would do onto
-/// a real system (binaries under `/usr/bin`, dbus's own `libdbus-1.so.3`
-/// under `/usr/lib/x86_64-linux-gnu`, dbus's `/etc/dbus-1/*.conf`, ...).
-/// `/usr/lib/x86_64-linux-gnu` is one of glibc's compiled-in default
-/// dynamic-linker search paths on this (Ubuntu) host — confirmed via
-/// `ld-linux-x86-64.so.2 --help` — so this needs no `ld.so.conf`/
-/// `ldconfig` step to be found at runtime.
-fn ninja_install(build_dir: &Path, root: &Path) -> Result<()> {
-    let destdir = std::env::current_dir().context("getting current directory")?.join(root);
+/// Every Phase 2+ package (seatd, dbus, eudev, wayland, and the rest of
+/// the link-time libraries) gets built AND installed into
+/// `cfg.sysroot_dir()` as part of `build-userland` itself (see
+/// `userland.rs`'s `meson_build_and_install`/`autotools_build_and_install`)
+/// — not just so the final rootfs has them, but so each package's build
+/// can find an *earlier* one (wayland-protocols needs `wayland-scanner`,
+/// libinput needs eudev's `libudev.pc`) the way a real distro's build
+/// pipeline chains packages through a sysroot rather than the host's own
+/// system paths. Assembling the rootfs is then just copying that whole
+/// tree in: `/usr/lib/x86_64-linux-gnu` is one of glibc's compiled-in
+/// default dynamic-linker search paths on this (Ubuntu) host — confirmed
+/// via `ld-linux-x86-64.so.2 --help` — so this needs no `ld.so.conf`/
+/// `ldconfig` step for any of it to be found at runtime.
+fn install_sysroot(cfg: &Config, root: &Path) -> Result<()> {
+    let sysroot = std::env::current_dir().context("getting current directory")?.join(cfg.sysroot_dir());
     run_in(
-        build_dir,
-        Command::new("ninja").arg("install").env("DESTDIR", destdir),
-    )
-}
-
-fn install_seatd(cfg: &Config, root: &Path) -> Result<()> {
-    ninja_install(&cfg.seatd_build_dir().join("build"), root)
-}
-
-fn install_dbus(cfg: &Config, root: &Path) -> Result<()> {
-    ninja_install(&cfg.dbus_build_dir().join("build"), root)
-}
-
-/// eudev is autotools, not meson, but the same DESTDIR trick applies —
-/// `make install` with DESTDIR set to the rootfs installs udevd, libudev,
-/// and the udev rules/hwdb data files exactly where Phase 3's libinput
-/// will expect to find them.
-fn install_eudev(cfg: &Config, root: &Path) -> Result<()> {
-    let destdir = std::env::current_dir().context("getting current directory")?.join(root);
-    run_in(
-        &cfg.eudev_build_dir(),
-        Command::new("make").arg("install").env("DESTDIR", destdir),
+        Path::new("."),
+        Command::new("cp").arg("-a").arg(format!("{}/.", sysroot.display())).arg(root),
     )
 }
 
