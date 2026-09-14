@@ -415,26 +415,23 @@ fn build_eudev(cfg: &Config, force: bool) -> Result<()> {
 
 /// Base Wayland: wire protocol libraries (client/server/cursor/egl) and
 /// `wayland-scanner`, the code generator every later Wayland-protocol
-/// package (wayland-protocols, and eventually the compositor) invokes at
-/// its own build time.
+/// package (wayland-protocols, Mesa, and eventually the compositor)
+/// invokes at its own build time.
 ///
-/// Built and installed differently from every other Phase 2+ package:
-/// with a real, absolute, on-disk `--prefix=<sysroot>/usr` and a *direct*
-/// install (no `DESTDIR`), rather than `--prefix=/usr` staged via
-/// `DESTDIR` like everything else. Reason: `wayland-scanner`'s own path
-/// gets baked as a custom pkg-config variable
-/// (`wayland_scanner=${bindir}/wayland-scanner`) that — unlike ordinary
-/// `Cflags`/`Libs` — pkg-config's `PKG_CONFIG_SYSROOT_DIR` does *not*
-/// rewrite (that only happens for variables the package itself templated
-/// with `${pc_sysrootdir}`, which wayland's own build doesn't do for this
-/// one). wayland-protocols' build reads that variable and directly
-/// executes whatever path it names — with `--prefix=/usr`, that would be
-/// the literal string `/usr/bin/wayland-scanner`, which does not exist
-/// anywhere on this host. An absolute sysroot prefix makes the baked path
-/// genuinely resolve to a real file instead. This is safe specifically
-/// for wayland because nothing in its own *shared libraries* does a
-/// prefix-derived runtime lookup the way dbus/eudev's daemons do — a
-/// `.so`'s SONAME-based linking doesn't care what `--prefix` built it.
+/// `wayland-scanner`'s own path gets baked into wayland's installed `.pc`
+/// file as a custom variable (`wayland_scanner=${bindir}/wayland-scanner`),
+/// and later packages' builds `get_variable()` that and directly execute
+/// whatever path it names — this used to need special-casing wayland's own
+/// build (an absolute, on-disk `--prefix`, installed directly instead of
+/// via `DESTDIR`) because a bare `pkg-config --variable=` lookup doesn't
+/// rewrite custom variables for a sysroot. It turns out meson's own
+/// `PkgConfigDependency` is more thorough than raw pkg-config here: with
+/// `PKG_CONFIG_SYSROOT_DIR` set (which `sysroot_env` always sets), meson
+/// *does* rewrite this variable before treating it as a program path —
+/// confirmed by testing wayland built the same `--prefix=/usr` +
+/// `DESTDIR` way as everything else, and wayland-protocols' build finding
+/// `wayland-scanner` at the correct sysroot-relocated path regardless. No
+/// special case needed.
 fn build_wayland(cfg: &Config, force: bool) -> Result<()> {
     let dir = cfg.wayland_build_dir();
     let binary = dir.join("build").join("src").join("wayland-scanner");
@@ -445,26 +442,11 @@ fn build_wayland(cfg: &Config, force: bool) -> Result<()> {
     }
 
     println!("configuring/building/installing wayland in {}", dir.display());
-    let prefix = format!("{}/usr", sysroot_abs(cfg)?.display());
-
-    let mut setup = Command::new("meson");
-    setup
-        .arg("setup")
-        .arg("build")
-        .arg(format!("--prefix={prefix}"))
-        .args(["-Ddocumentation=false", "-Dtests=false", "-Ddtd_validation=false"]);
-    sysroot_env(cfg, &mut setup)?;
-    run_in(&dir, &mut setup)?;
-
-    let mut build = Command::new("ninja");
-    build.arg("-C").arg("build");
-    sysroot_env(cfg, &mut build)?;
-    run_in(&dir, &mut build)?;
-
-    let mut install = Command::new("ninja");
-    install.arg("-C").arg("build").arg("install");
-    sysroot_env(cfg, &mut install)?;
-    run_in(&dir, &mut install)
+    meson_build_and_install(
+        cfg,
+        &dir,
+        &["-Ddocumentation=false", "-Dtests=false", "-Ddtd_validation=false"],
+    )
 }
 
 /// The Wayland protocol XML definitions themselves (xdg-shell and
