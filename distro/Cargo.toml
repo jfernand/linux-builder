@@ -7,7 +7,7 @@ edition = "2024"
 builder-core = { path = "../builder-core" }
 buildpack-core = { path = "../buildpack-core" }
 buildpacks = { path = "../buildpacks" }
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-serde = { version = "1", features = ["derive"] }
-toml = "1.1.6"
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

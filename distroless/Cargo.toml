@@ -7,8 +7,8 @@ edition = "2024"
 builder-core = { path = "../builder-core" }
 buildpack-core = { path = "../buildpack-core" }
 buildpacks = { path = "../buildpacks" }
-clap = { version = "4", features = ["derive"] }
-anyhow = "1"
-toml = "1.1.6"
+clap = { workspace = true }
+anyhow = { workspace = true }
+toml = { workspace = true }
 ratatui = "0.30"
 crossterm = "0.29"
