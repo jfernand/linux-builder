@@ -29,6 +29,10 @@ url = "https://git.sr.ht/~kennylevinsen/seatd/archive/0.9.3.tar.gz"
 version = "1.16.2"
 url = "https://dbus.freedesktop.org/releases/dbus/dbus-1.16.2.tar.xz"
 
+[eudev]
+version = "3.2.14"
+url = "https://github.com/eudev-project/eudev/releases/download/v3.2.14/eudev-3.2.14.tar.gz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048

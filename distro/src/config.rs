@@ -18,6 +18,7 @@ pub struct Config {
     pub shadow: ShadowConfig,
     pub seatd: SeatdConfig,
     pub dbus: DbusConfig,
+    pub eudev: EudevConfig,
     pub image: ImageConfig,
     #[serde(default = "default_build_dir")]
     pub build_dir: PathBuf,
@@ -51,6 +52,14 @@ pub struct SeatdConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DbusConfig {
+    pub version: String,
+    pub url: String,
+}
+
+/// eudev: a systemd-independent fork of udev, providing libudev for
+/// libinput (Phase 2's real device-manager daemon, alongside seatd/dbus).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EudevConfig {
     pub version: String,
     pub url: String,
 }
@@ -110,6 +119,10 @@ impl Config {
 
     pub fn dbus_build_dir(&self) -> PathBuf {
         self.build_dir.join("dbus").join(format!("dbus-{}", self.dbus.version))
+    }
+
+    pub fn eudev_build_dir(&self) -> PathBuf {
+        self.build_dir.join("eudev").join(format!("eudev-{}", self.eudev.version))
     }
 
     pub fn rootfs_dir(&self) -> PathBuf {
