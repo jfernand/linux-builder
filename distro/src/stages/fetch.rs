@@ -104,6 +104,7 @@ pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
         &cfg.libdisplay_info_build_dir(),
         force,
     )?;
+    patch_libdisplay_info_hwdata(&cfg.libdisplay_info_build_dir())?;
 
     fetch_tarball(
         cfg,
@@ -209,6 +210,49 @@ fn patch_uutils_binary_path(dir: &Path) -> Result<()> {
     }
 
     println!("patching uutils binary_path (AT_EXECFN-empty fallback)");
+    std::fs::write(&path, text.replace(OLD, NEW))
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// libdisplay-info's meson.build looks up `hwdata` (the package providing
+/// `/usr/share/hwdata/pnp.ids`, a vendor-ID database it embeds into the
+/// built library at compile time — a build-time-only need, nothing reads
+/// it at target runtime) via `dependency('hwdata', ...).get_variable(...)`.
+/// That variable resolves correctly on the *host* (where hwdata is
+/// actually installed), but our `PKG_CONFIG_SYSROOT_DIR` — necessary for
+/// every package that genuinely does live under our sysroot — rewrites it
+/// into a sysroot path hwdata was never installed under, since hwdata is
+/// found via pkg-config's own default search, not our sysroot's
+/// `PKG_CONFIG_PATH`. Same class of bug as Mesa's spirv-tools and
+/// libxkbcommon's libxml2 (see userland.rs's `sysroot_env`), but neither
+/// "force the system pkg-config" nor "disable the optional feature" apply
+/// here — `hwdata` isn't optional-and-skippable, and the mangled path
+/// comes from a `get_variable()` call the same way wayland-scanner's did.
+/// Unlike those, libdisplay-info's own meson.build already has an
+/// unconditional fallback to the literal, correct host path in its `else`
+/// branch — this patch just always takes it.
+fn patch_libdisplay_info_hwdata(dir: &Path) -> Result<()> {
+    let path = dir.join("meson.build");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading {}", path.display()))?;
+
+    const OLD: &str = "dep_hwdata = dependency('hwdata', required: false, native: true)\nif dep_hwdata.found()\n\thwdata_dir = dep_hwdata.get_variable(pkgconfig: 'pkgdatadir')\n\tpnp_ids = files(hwdata_dir / 'pnp.ids')\nelse\n\tpnp_ids = files('/usr/share/hwdata/pnp.ids')\nendif";
+    const NEW: &str = "pnp_ids = files('/usr/share/hwdata/pnp.ids')";
+
+    if !text.contains("dep_hwdata = dependency(") {
+        println!("libdisplay-info hwdata lookup already patched");
+        return Ok(());
+    }
+
+    if !text.contains(OLD) {
+        bail!(
+            "couldn't find the expected hwdata lookup code in {} to patch \
+             (libdisplay-info upstream may have changed it) — see patch_libdisplay_info_hwdata",
+            path.display()
+        );
+    }
+
+    println!("patching libdisplay-info to always use the literal hwdata path");
     std::fs::write(&path, text.replace(OLD, NEW))
         .with_context(|| format!("writing {}", path.display()))
 }
