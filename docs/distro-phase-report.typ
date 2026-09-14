@@ -1,88 +1,282 @@
 #import "isss-template.typ": *
 
 #show: isss-doc.with(
-  title: "We Are The Distro",
-  subtitle: "Building a From-Scratch glibc Linux, Phase by Phase",
+  title: "Anatomy of Distro",
+  subtitle: "How a From-Scratch glibc Linux Is Put Together, Piece by Piece",
   author: "Javier Fernández",
   contact: "jfernand@me.com",
   date: "2026-09-14",
   docid: "ISSS-TR-0421",
-  running: "We Are The Distro · distro crate build-pipeline report",
+  running: "Anatomy of Distro · a piece-by-piece build guide",
   abstract: [
     #cd[distro] is a Rust CLI that builds a bootable, glibc-based Linux
-    distribution entirely from upstream source, using nothing but the host's
-    own compiler toolchain — no foreign package manager, no bootstrap image,
-    no binary blobs beyond what the kernel itself requires. This report
-    documents what has actually been built and verified in QEMU as of Phase 2:
-    a real kernel, a statically-linked POSIX userland with genuine
-    #cd[login]/#cd[getty] authentication, and the seat-management, D-Bus, and
-    device-management daemons a Wayland desktop needs before a compositor can
-    exist at all. It also records the two architectural decisions forced by
-    that work — the pivot from static to dynamic linking, and the staged
-    sysroot that makes chained source builds possible — and the deliberate
-    scope cuts (no libxcb, no legacy multitouch, no tablet support) made to
-    keep each phase's milestone reachable without getting lost in completionism.
+    system entirely from upstream source, using nothing but the host's own
+    compiler toolchain. This report explains how the thing is actually put
+    together: what runs first when the machine powers on, what each binary
+    and library in the image is for, how they depend on one another, and how
+    the build pipeline turns forty-odd separate upstream projects into one
+    disk image. It is organized the way the system itself is layered — kernel,
+    init, a static POSIX base, the seat/session daemons, and the still-unused
+    Wayland-core libraries waiting for a compositor — rather than as a
+    chronological log of work done.
   ],
   meta: (
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
-    ("Verification", [QEMU/OVMF boot, scripted serial-console interaction, every milestone below reproduced live]),
-    ("Status", [Phase 2 complete · Phase 3 (graphics) not started]),
+    ("Coverage", [Everything built and QEMU-verified through Phase 2 — a real kernel, real login, seat/session daemons, Wayland-core libraries]),
+    ("Not covered", [Phases 3–6: a compositor, GPU drivers, a Rust toolchain on-target, COSMIC itself — see §6]),
   ),
 )
 
-= Why This Exists
+= What Distro Is
 
-Most of the ways to get a custom Linux system booting quickly involve
-starting from someone else's finished distribution — `debootstrap`, a
-container base image, an Arch `pacstrap` — and layering changes on top. That
-approach was explicitly rejected for this project. Every binary that ends up
-in the built image is compiled here, from source, against nothing but the
-host machine's own glibc and gcc. The one deliberate exception is the same
-one every real distribution makes: the host's *compiler toolchain* — gcc,
-binutils, meson, autoconf — is infrastructure, not distro content, in the
+Most ways to get a custom Linux system booting quickly start from someone
+else's finished distribution — `debootstrap`, a container base image, an
+Arch `pacstrap` — and layer changes on top. This project rejected that:
+every binary in the built image is compiled here, from source, against
+nothing but the host machine's own glibc and gcc. The one exception is the
+same one every real distribution makes: the host's *compiler toolchain* —
+gcc, binutils, meson, autoconf — is infrastructure, not distro content, the
 same way a bootstrap compiler is infrastructure for a self-hosting language.
-
-#callout(kind: "info", "Reading this report")[
-  This is a snapshot, not a specification. It describes what has been built
-  and verified, phase by phase, up through Phase 2. §7 lists the phases that
-  come after it (COSMIC, graphics, a Rust toolchain on-target) exactly as
-  scoped in the project's planning document, unstarted.
-]
-
-#spec(
-  ("§ 2", [The workspace: four crates, what each one is for.]),
-  ("§ 3", [Phase 0 — scaffolding the #cd[distro] crate.]),
-  ("§ 4", [Phase 1 — a minimal glibc userland with real #cd[login].]),
-  ("§ 5", [Phase 2 — seat/session plumbing and the Wayland-core libraries.]),
-  ("§ 6", [The two architectural pivots Phase 2 forced: static → dynamic linking, and the staged sysroot.]),
-  ("§ 7", [What's still ahead: Phases 3 through 6.]),
-  ("§ 8", [How every milestone in this report was actually verified.]),
-)
-
-= The Workspace
 
 #dtable(
   columns: (auto, 1fr),
   ([Crate], [Role]),
-  ([#cd[builder-core]], [Shared library: kernel build (`FEATURE_PACKS`), disk-image assembly, QEMU test harness, USB writer. Used by both distros unchanged.]),
-  ([#cd[distroless]], [The original, minimal distro: musl + BusyBox + uutils, cross-compiled. Not covered in this report.]),
-  ([#cd[distro]], [The subject of this report: a from-scratch *glibc* distro, native-compiled, aimed eventually at a COSMIC desktop.]),
-  ([#cd[distro-init]], [A from-scratch PID 1 written for this project in \~100 lines of Rust — mounts the virtual filesystems, supervises every daemon below, reaps orphans.]),
+  ([#cd[builder-core]], [Shared library: kernel build (`FEATURE_PACKS`), disk-image assembly, the QEMU test harness, the USB writer. Used by both distros unchanged.]),
+  ([#cd[distroless]], [A separate, minimal distro built by this same workspace: musl + BusyBox + uutils, cross-compiled. Not covered here.]),
+  ([#cd[distro]], [The subject of this report: a from-scratch *glibc* system, native-compiled, aimed eventually at a COSMIC desktop.]),
+  ([#cd[distro-init]], [A from-scratch PID 1 written for this project, \~100 lines of Rust — see §2.2.]),
 )
 
-`distro`'s own config (`distro.toml`) does not reuse `distroless`'s
-top-level `Config` struct — it composes the pieces that are genuinely
-identical (`KernelConfig`, `ImageConfig`, `UutilsConfig`, all from
-`builder-core`) with sections of its own (`bash`, `util_linux`, `shadow`,
-`seatd`, `dbus`, `eudev`, and the six Phase 2 library sections in §5).
+#spec(
+  ("§ 2", [The boot sequence — what actually happens, in order, from power-on to a shell.]),
+  ("§ 3", [The static base: coreutils, shell, login — one binary in, no shared-library bookkeeping.]),
+  ("§ 4", [The seat/session layer: seatd, dbus, eudev — what each one actually does.]),
+  ("§ 5", [The Wayland-core libraries — built, installed, not yet used by anything.]),
+  ("§ 6", [How it's all actually built: the pipeline, the config file, the sysroot.]),
+  ("§ 7", [What isn't part of the picture yet.]),
+)
+
+= The Boot Sequence
+
+The clearest way to see how the pieces fit is to follow what actually
+happens, in order, when the built image boots. At a high level, every Linux
+system does the same three things: a *bootloader* (GRUB) finds and loads the
+*kernel*; the kernel initializes hardware, mounts the root filesystem, and
+executes exactly one program as process ID 1 — conventionally called
+*init*; and everything else on the system is, directly or indirectly,
+started by that init process. What differs system to system is entirely
+what init actually does next — systemd starts hundreds of units in
+dependency order; BusyBox's init reads a small `/etc/inittab`; this project
+writes its own init (§2.2) that does five things and nothing else.
+
+#dtable(
+  columns: (auto, auto, 1fr),
+  align: (left, left, left),
+  ([Step], [Component], [What happens]),
+  ([1], [GRUB], [Reads `/boot/vmlinuz` and hands off. Installed by `builder-core`'s image stage, unchanged from `distroless`.]),
+  ([2], [Kernel], [Boots, mounts the ext4 rootfs read-write, execs `/sbin/init`. Built by `builder-core::stages::kernel` — the same generic stage `distroless` uses.]),
+  ([3], [distro-init], [Our own PID 1 (§2.2). Mounts `/proc`, `/sys`, `/dev` (devtmpfs), and a fresh `tmpfs` at `/run`.]),
+  ([4], [udevd, seatd, dbus-daemon], [Forked and exec'd, in that order. `distro-init` then runs `udevadm trigger` once — a *coldplug* that tells `udevd` about the devices devtmpfs already created before it started.]),
+  ([5], [agetty ×2], [Forked on `tty1` (VGA console) and `ttyS0` (serial, for QEMU/headless use). Whichever exits gets respawned.]),
+  ([6], [login], [`agetty` execs `/bin/login` once a username is typed. `login` reads `/etc/passwd` + `/etc/shadow` for real — the `root` account's shadow entry has an empty password field, so `login` skips the password prompt entirely rather than reimplementing BusyBox's separate no-password shortcut.]),
+  ([7], [bash], [`login` execs the shell named in `/etc/passwd`. A real, interactive shell — not a script, not a fallback.]),
+)
+
+#callout(kind: "ok", "This is not a diagram — it was watched happening")[
+  Every arrow above was reproduced live in QEMU with a scripted serial-console
+  session, not inferred from source reading: `login: root` → no password
+  prompt → `-bash-5.2#` → `dbus-send --system … ListNames` returns a real
+  reply → `udevadm info --query=all --name=/dev/tty1` returns a populated
+  device entry. See §6.4 for the harness.
+]
+
+== Why a custom init at all
+
+BusyBox (which `distroless` uses) ships its own tiny init built in; nothing
+glibc-based has an equivalent single binary. Rather than reach for systemd —
+which would drag in `logind`, `udev`, `journald`, and a great deal more than
+this system currently needs — `distro-init` is \~100 lines of Rust using the
+`nix` crate:
+
+#codepanel(title: "distro-init/src/main.rs — the whole supervision loop, abbreviated")[
+```rust
+fn main() {
+    mount_basic_filesystems();          // proc, sysfs, devtmpfs, tmpfs at /run
+
+    let mut udevd_pid = spawn_udevd();  // no -d: stays a tracked child, not a daemon
+    let mut seatd_pid = spawn_seatd();
+    let mut dbus_pid  = spawn_dbus();   // --nofork, same reasoning
+    coldplug_devices();                 // `udevadm trigger`, one-shot
+
+    let mut tty1_pid   = spawn_tty1();  // agetty
+    let mut serial_pid = spawn_serial();
+
+    loop {
+        match waitpid(None, Some(WaitPidFlag::empty())) {
+            Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) => {
+                // whichever of the five died gets forked again; anything
+                // else reaped here was just an orphaned grandchild.
+            }
+            ...
+        }
+    }
+}
+```
+]
+
+Every daemon it starts would normally daemonize itself (fork, detach, exit
+the parent) — `dbus-daemon --nofork` and `udevd` with no `-d` suppress that,
+so they stay `distro-init`'s direct children and its `waitpid` loop actually
+sees them exit if they crash.
+
+= The Static Base
+
+Five packages exist purely to get from a mounted rootfs to a real,
+authenticated shell.
+
+#callout(kind: "info", "coreutils, BusyBox, and uutils — three answers to the same question")[
+  Every Unix system needs a basic set of file and text commands — `ls`,
+  `cat`, `cp`, `mv`, `rm`, and so on. "Coreutils" is the generic name for
+  that toolset, not one specific program. *GNU coreutils* is the
+  implementation most desktop Linux distributions ship. *BusyBox* is a
+  different, much older answer aimed at tiny/embedded systems: a single
+  small C binary that crams coreutils *and* a shell, `init`, `mount`, `ps`,
+  and dozens of other tools into one multi-call executable — this
+  workspace's other distro, `distroless`, uses it. *uutils* is a third
+  answer: a from-scratch reimplementation of just coreutils, in Rust. This
+  project uses uutils instead of BusyBox for `distro` specifically because
+  of the "prefer Rust alternatives to traditional tools" goal behind the
+  whole `distro` crate — BusyBox would have worked technically, the same
+  way it does for `distroless`.
+]
+
+The glibc equivalent of what BusyBox does as one binary is spread across
+five separate upstream projects here, because glibc-land has no single
+equivalent to reach for.
+
+#dtable(
+  columns: (auto, auto, auto, 1fr),
+  align: (left, left, left, left),
+  ([Package], [Version], [Provides], [Why it's there]),
+  ([uutils/coreutils], [git `main`], [`ls`, `cat`, `cp`, …], [A Rust reimplementation of GNU coreutils — one multi-call binary, symlinked under every applet name. The built feature set is a curated subset (see §7), not the full set.]),
+  ([bash], [5.2.37], [`/bin/bash`, `/bin/sh`], [The login shell named in `/etc/passwd`.]),
+  ([util-linux], [2.41.2], [`agetty`, `mount`, `umount`], [Built with `--disable-all-programs` plus explicit `--enable-*` for just these three — util-linux ships dozens of tools, only these are needed.]),
+  ([shadow-utils], [4.17.4], [`login`, `passwd`], [Real `/etc/passwd` + `/etc/shadow` authentication — not BusyBox's separate empty-password mechanism, genuine shadow-file semantics.]),
+)
+
+All five are *statically linked* — `--disable-shared --enable-static` at
+configure time, `LDFLAGS=-all-static` at `make` time (plain `-static` alone
+breaks configure's own compiler sanity check once libtool is involved). One
+binary compiled, one binary copied into the rootfs, nothing else to track.
+This is why they sit apart from everything in §4–5: dynamic linking doesn't
+enter the picture until `dbus` (§4), which needs `libexpat` and isn't
+meaningfully staticable.
+
+#callout(kind: "trap", "A dispatch bug specific to this build")[
+  uutils decides which applet `argv[0]` refers to by reading the kernel's
+  `AT_EXECFN` auxval on non-musl Linux (hardening against `argv[0]`
+  spoofing) instead of trusting `argv[0]` directly. On this build host — and
+  inside this project's own kernel — `AT_EXECFN` comes back *empty*, so
+  every applet invocation hit `"<unknown binary name>"` before dispatch even
+  started. `distro/src/stages/fetch.rs` patches a fallback to `argv0` into
+  uutils' `src/common/validation.rs` on every fetch, idempotently.
+]
+
+= The Seat & Session Layer
+
+Three daemons exist to do the things a desktop session needs *before* any
+compositor can run: let an unprivileged process touch `/dev/input` and
+`/dev/dri`, pass messages between processes, and know what hardware is
+plugged in. None of them are optional for Phase 3 — they're the floor a
+compositor stands on, not decoration.
+
+#callout(kind: "info", "What udev actually is")[
+  The kernel's device drivers know about hardware, but they don't manage
+  `/dev` themselves in any structured way — `devtmpfs` (already mounted by
+  `distro-init`, §2) creates basic device nodes automatically as drivers
+  load, and that's all it does. `udev` is the userspace daemon that listens
+  for the kernel's own hardware-change announcements (sent over a netlink
+  socket whenever something is plugged in, unplugged, or otherwise changes
+  state), and in response creates or removes the matching `/dev` entries,
+  applies permissions/rules, and maintains a live, queryable database of
+  what hardware currently exists — the thing `udevadm info` reads from.
+  Without it running, nothing gets notified when a device appears after
+  boot, and nothing can ask "what's connected right now" in a structured
+  way. `eudev` is a fork of `udev` that works without systemd, which this
+  project needs since it uses `seatd` instead of `systemd-logind` (below) —
+  ordinary `udev` is a systemd subproject these days.
+]
+
+#dtable(
+  columns: (auto, auto, 1fr),
+  align: (left, left, left),
+  ([Package], [Version], [What it actually does]),
+  ([seatd], [0.9.3], [Owns `/dev/input/*` and `/dev/dri/*` on behalf of whatever process asks nicely over its socket, so a compositor doesn't need to run as root to touch a keyboard or a GPU. Its own README says it "depends only on libc" — the systemd-`logind` alternative, chosen explicitly over pulling in systemd (see the callout below).]),
+  ([dbus], [1.16.2], [The system message bus every desktop component uses to talk to every other one. Runs as `root` here (`-Ddbus_user=root`) — the rootfs has no unprivileged `messagebus` user yet to drop privileges to.]),
+  ([eudev], [3.2.14], [A systemd-independent fork of `udev` (what Alpine, Void, and Gentoo use without systemd) — walks `/sys`, builds a device database, and exposes it as `libudev`. Exists in this pipeline for one specific reason: `libinput` (§5) hard-depends on `libudev`, and there is no way around that dependency.]),
+)
+
+#callout(kind: "info", "seatd instead of systemd — an open question, not a closed one")[
+  Choosing `seatd` over systemd was a deliberate decision, made explicitly
+  rather than defaulted into, to avoid pulling in `logind`, full `udev`,
+  `journald`, and `networkd` for one seat-management socket. Whether `seatd`
+  alone will actually satisfy COSMIC once Phase 5 needs a real session is
+  still an open question — this system proves `seatd` starts and holds a
+  seat, not that COSMIC will accept it as `logind`'s replacement.
+]
+
+`distro-init` starts all three (plus `udevd`, which is really this same
+device-management job — see §2.1's table) and supervises them the same way
+it supervises `agetty`. `dbus`'s socket lands at `/run/dbus/system_bus_socket`
+and `distro-init` creates `/run/dbus` itself immediately after mounting a
+fresh `tmpfs` at `/run`, since nothing else would.
+
+= The Wayland-Core Libraries
+
+Nothing in this section runs. Seven libraries are built and installed into
+the rootfs, waiting for Phase 3's compositor to be the first thing that
+actually links against any of them — verification at this layer is "builds
+and installs cleanly against everything before it," not "does something
+observable."
+
+#dtable(
+  columns: (auto, auto, 1fr),
+  align: (left, left, left),
+  ([Package], [Version], [What it's for]),
+  ([wayland], [1.26.0], [The core wire-protocol libraries (client, server, cursor, EGL) and `wayland-scanner`, the code generator every later Wayland package runs at its own build time.]),
+  ([wayland-protocols], [1.49], [The actual protocol definitions — `xdg-shell` and the rest — as XML. No library of its own, just data plus a pkg-config file.]),
+  ([libxkbcommon], [1.12.4], [Turns "us, evdev, pc105" into the keymap tables a compositor hands to clients. X11 support is off (no `libxcb` — see §7); real keymap compilation needs the `xkeyboard-config` data package, also not built yet.]),
+  ([pixman], [0.46.4], [Software rasterization — Mesa's fallback path, and some compositor-side operations not worth sending to the GPU.]),
+  ([libdisplay-info], [0.4.0], [Parses a monitor's own EDID/DisplayID — how a compositor learns what resolutions and refresh rates a display actually supports.]),
+  ([libevdev], [1.13.7], [Reads and writes raw evdev input-device events. `libinput`'s one mandatory dependency.]),
+  ([libinput], [1.31.3], [Turns raw evdev events into the pointer/keyboard/touch/gesture events a compositor actually wants. `libwacom` (tablets) and `mtdev` (legacy multitouch) are both left out — see §7.]),
+)
+
+The dependency order between them is also the build order: `wayland` first
+(nothing else here can build without `wayland-scanner`), then
+`wayland-protocols` (needs `wayland-scanner` on `PATH`), then the rest, with
+`libinput` last since it needs both `eudev`'s `libudev` (§4) and `libevdev`.
+
+= How It's Actually Built
+
+== The config file
+
+`distro.toml` is not one monolithic struct. `distro`'s `Config` composes the
+pieces that are genuinely identical to `distroless` (`KernelConfig`,
+`ImageConfig`, `UutilsConfig`, all from `builder-core`) with a `[section]`
+per package in §3–5 — each just a `version` and a source `url`, plus one
+`build_dir()` helper method per package computing exactly where its tarball
+extracts to.
+
+== The pipeline, stage by stage
 
 #codepanel(title: "distro's CLI surface (distro/src/cli.rs)")[
 ```
 distro fetch                    # download + extract every source tarball
 distro build-toolchain          # apt-get the host build tools (once)
-distro build-kernel              # builder-core, unchanged
-distro build-userland            # everything in §4 and §5
+distro build-kernel              # builder-core, unchanged from distroless
+distro build-userland            # every package in §3, §4, and §5
 distro assemble-rootfs           # merge it all into build-distro/rootfs
 distro make-image                # partition + GRUB + write the disk image
 distro test-qemu [--window]      # boot it
@@ -91,293 +285,93 @@ distro all                       # the whole pipeline, in order
 ```
 ]
 
-= Phase 0 — Scaffolding
+`build-userland` is where §3–5's packages actually compile — each package
+gets its own `build_<name>` function in `distro/src/stages/userland.rs`,
+called in dependency order. `assemble-rootfs` then builds the actual root
+filesystem tree: coreutils and its applet symlinks, bash, the §3 static
+binaries, the §4–5 dynamic ones (via the sysroot, below), the host's own
+`libc.so.6`/`libexpat.so.1`/`libm.so.6` and dynamic linker (confirmed via
+`ld-linux-x86-64.so.2 --help` to already be on glibc's default search path
+here — no `ldconfig` step needed), `distro-init` itself as `/sbin/init`, and
+`/etc/passwd`+`/etc/shadow`.
 
-Phase 0 did no source-building at all — its only goal was a working
-`cargo run -p distro -- build-kernel` end to end, by wiring `distro`'s CLI
-straight through to `builder-core`'s already-generic kernel/image/QEMU/USB
-stages. `build-userland` and `assemble-rootfs` were stubs that `bail!`ed with
-"not yet implemented." This is the milestone every later phase's `--force`
-rebuild still passes through on its way to a fresh image.
+== The sysroot: how packages in §4–5 find each other
 
-= Phase 1 — A Minimal glibc Base, With Real Login
+Phase 1's five packages never needed each other at build time — each just
+needed the host's gcc. §4–5's packages do: `wayland-protocols` needs
+`wayland-scanner` on `PATH` at its own build time, and `libinput` needs
+`eudev`'s installed `libudev.pc` to link against `libudev` at all. Every
+package in §4–5 is therefore built with `--prefix=/usr` (its normal, final,
+"as if genuinely installed" prefix) and installed with
+`DESTDIR=<build-distro/sysroot>` — files physically land under the sysroot,
+but the package's own compiled-in idea of its prefix stays `/usr`, which
+matters: `dbus`, for instance, looks up its own config file relative to
+whatever prefix it was *actually built with*, at its own runtime, on the
+real target — not at build time. `PKG_CONFIG_SYSROOT_DIR`, a mechanism
+pkg-config itself provides, then rewrites the `-I`/`-L` paths a later
+package's build sees from `/usr/...` to the sysroot's real, on-disk
+`<sysroot>/usr/...`. `assemble-rootfs` copies that whole sysroot tree into
+the final rootfs with one `cp -a`.
 
-Phase 1's target was deliberately narrow: reach a `login:` prompt, authenticate
-for real, and land in a working `bash` shell — the glibc equivalent of what
-`distroless` already does with BusyBox, but with no single BusyBox-shaped
-binary to lean on. Five separate upstream projects fill that one role.
+#callout(kind: "trap", "One package breaks this pattern, on purpose")[
+  `wayland` alone is built differently: with a real, absolute,
+  on-disk `--prefix=<sysroot>/usr` and installed directly, no `DESTDIR`.
+  `wayland-scanner`'s own path is baked into `wayland`'s `.pc` file as a
+  *custom* variable (`wayland_scanner=${bindir}/wayland-scanner`) that —
+  unlike ordinary `Cflags`/`Libs` — `PKG_CONFIG_SYSROOT_DIR` does not
+  rewrite, and `wayland-protocols`' build executes whatever path that
+  variable names, directly, as part of its own build. With `--prefix=/usr`
+  that path would read the literal string `/usr/bin/wayland-scanner`, which
+  does not exist anywhere on the host. This is safe specifically for
+  `wayland` because none of its own *shared libraries* do a prefix-derived
+  runtime lookup the way `dbus`/`eudev`'s daemons do.
 
-#dtable(
-  columns: (auto, auto, auto, 1fr),
-  align: (left, left, left, left),
-  ([Package], [Version], [Build], [Role]),
-  ([uutils/coreutils], [git `main`], [cargo, static], [`ls`/`cat`/`cp`/… — the actual applets are a curated feature-flag subset, not the full set (see §8).]),
-  ([bash], [5.2.37], [autotools, static], [Login shell (`/bin/sh` → `bash`).]),
-  ([util-linux], [2.41.2], [autotools, static], [`agetty`, `mount`, `umount` only — `--disable-all-programs` plus explicit `--enable-*` for just these three.]),
-  ([shadow-utils], [4.17.4], [autotools, static], [`login`, `passwd` — real `/etc/passwd`+`/etc/shadow` authentication, not BusyBox's empty-password shortcut.]),
-  ([distro-init], [this repo], [cargo, static], [PID 1: mounts `/proc`, `/sys`, `/dev`; forks/execs `agetty` on `tty1` and `ttyS0`; respawns either on exit.]),
-)
-
-#callout(kind: "trap", "The AT_EXECFN patch")[
-  uutils' multi-call dispatch (which applet `ls` vs `cat` resolves to) reads
-  the kernel's `AT_EXECFN` auxval on non-musl Linux instead of trusting
-  `argv[0]`, as a hardening measure. On this build host — and inside this
-  project's own kernel — `AT_EXECFN` comes back *empty*, so every applet
-  invocation hit `"<unknown binary name>"` before dispatch even started.
-  `distro/src/stages/fetch.rs` patches a fallback to `argv0` into
-  `src/common/validation.rs` on every fetch, idempotently, with a `bail!`
-  guard if upstream ever changes the code being patched out from under it.
+  An earlier version got this backwards — every package used the absolute
+  sysroot prefix, not just `wayland` — and it booted, but `dbus-daemon`
+  crash-looped: `distro-init` logged `"dbus-daemon exited, respawning"` on
+  repeat, because `dbus` had baked in a literal build-machine path
+  (`.../build-distro/sysroot/usr/share/dbus-1/system.conf`) as its config
+  search location. Found by an actual QEMU boot, not by review.
 ]
 
-Every Phase 1 binary is *statically linked*
-(`--disable-shared --enable-static` at configure time, `LDFLAGS=-all-static`
-at `make` time — plain `-static` breaks configure's own compiler sanity
-check under libtool). One binary in, one binary copied to the rootfs, no
-shared-library bookkeeping. `/etc/shadow` carries a single `root` account
-with an empty password field, which makes `login` skip the password prompt
-entirely rather than reimplementing BusyBox's separate no-password trick.
+== How every claim in this report was checked
 
-#callout(kind: "ok", "Verified")[
-  QEMU boot → `distro-init` starts → `agetty` on `tty1` → `login: root` → no
-  password prompt (empty shadow field) → `-bash-5.2#` → `ls /bin | wc -l` →
-  `40`. Reached via `agetty` → `login` → `bash`, not a direct shell spawn.
+A Python harness opens a PTY (`pty.openpty()`, with `TIOCSWINSZ` set — QEMU's
+serial console renders nothing at a 0×0 terminal size), launches
+`qemu-system-x86_64` with the built image over `virtio` and OVMF for UEFI
+boot, and drives the console with a small state machine keyed on regexes
+over the accumulated output — `login:`, a shell prompt, a sentinel string
+echoed after each command — rather than fixed sleeps.
+
+#callout(kind: "trap", "A build-pipeline bug this same method caught")[
+  `assemble-rootfs` once failed outright with "No such file or directory"
+  copying the freshly built `distro-init` binary. Cause: this build host
+  sets `CARGO_TARGET_DIR` to a shared cache outside the repo, which `cargo`
+  honors — so the binary was never at the hardcoded `target/…` path the
+  rootfs-assembly code assumed. Fixed by reading `CARGO_TARGET_DIR` at the
+  same call site cargo itself does.
 ]
 
-= Phase 2 — Seat/Session Plumbing, Wayland Core
-
-Phase 2's charter, per the project's own roadmap, was narrow on purpose: get
-`seatd` and `dbus` — the plumbing a desktop session needs *before* any
-compositor exists — running on-target, with no compositor yet. What actually
-shipped is somewhat larger than that stated minimum: alongside the
-seatd/dbus milestone, this phase also built every Wayland-core library Phase
-3's compositor will link against, plus `eudev` (device management) and
-`libinput` (turns raw evdev events into pointer/keyboard/touch events),
-neither of which were in the original two-package milestone but which were
-pulled forward because `libinput` hard-depends on `libudev` and there is no
-clean way to build it, or verify anything about it, without that dependency
-satisfied first.
-
-== The daemons
-
-#dtable(
-  columns: (auto, auto, auto, 1fr),
-  align: (left, left, left, left),
-  ([Package], [Version], [Build], [Role]),
-  ([seatd], [0.9.3], [meson, dynamic], [Seat management — mediates access to `/dev/input`, `/dev/dri` without requiring root. "Depends only on libc" per its own README; built dynamically anyway, for consistency with everything after it.]),
-  ([dbus], [1.16.2], [meson, dynamic], [System message bus. Runs as `root` (`-Ddbus_user=root`) — no `messagebus` user exists in this rootfs yet.]),
-  ([eudev], [3.2.14], [autotools, dynamic], [systemd-independent `udev` fork (the Alpine/Void/Gentoo answer to "I don't have systemd but I need `libudev`"). blkid/SELinux/kmod support all disabled.]),
-)
-
-All three are supervised by `distro-init` alongside `agetty`: forked, execed,
-and respawned on exit, the same pattern Phase 1 established. `dbus-daemon`
-runs with `--nofork` and `udevd` with no `-d` — both daemonize themselves by
-default, which would make them invisible to `distro-init`'s own
-`fork`/`waitpid` supervision loop. `distro-init` also mounts a `tmpfs` at
-`/run` (transient state, not part of the persisted rootfs) and runs
-`udevadm trigger` once at boot as a one-shot *coldplug*: `devtmpfs` already
-populated `/dev` before `udevd` started, but without telling it, so without
-the trigger `udevd`'s own device database would stay empty for anything
-already present at boot.
-
-#callout(kind: "ok", "Verified")[
-  `dbus-send --system … ListNames` returns a real method-return
-  (`org.freedesktop.DBus`, `:1.0`) rather than a connection error.
-  `udevadm info --query=all --name=/dev/tty1` after the coldplug trigger
-  returns a fully populated device entry (`DEVPATH`/`MAJOR`/`MINOR`/
-  `SUBSYSTEM`) — proof the trigger worked, not just that `udevd` started
-  without crashing.
-]
-
-== The link-time libraries
-
-Nothing below runs as a service — no `distro-init` changes accompany this
-table. Each is built, installed, and left waiting for Phase 3's compositor to
-actually link against it; verification at this stage is "builds and installs
-cleanly against everything before it," not "does something observable,"
-since nothing yet calls into them.
-
-#dtable(
-  columns: (auto, auto, auto, 1fr),
-  align: (left, left, left, left),
-  ([Package], [Version], [Build], [Role]),
-  ([wayland], [1.26.0], [meson, dynamic], [Core wire-protocol libraries (client/server/cursor/egl) and `wayland-scanner`, the code generator every later Wayland package invokes at its own build time.]),
-  ([wayland-protocols], [1.49], [meson, dynamic], [The protocol XML definitions (`xdg-shell` and the rest) — data plus a pkg-config file, no library.]),
-  ([libxkbcommon], [1.12.4], [meson, dynamic], [Keymap compilation. X11 support disabled (no `libxcb` — see below). `xkb-config-root` pinned to `/usr/share/X11/xkb`, though the `xkeyboard-config` data package itself isn't built yet — see §8.]),
-  ([pixman], [0.46.4], [meson, dynamic], [Software rasterization — Mesa's fallback path and some compositor-side operations not worth doing on the GPU.]),
-  ([libdisplay-info], [0.4.0], [meson, dynamic], [EDID/DisplayID parsing — how a compositor reads a monitor's own supported-mode list.]),
-  ([libevdev], [1.13.7], [meson, dynamic], [`libinput`'s mandatory dependency for reading/writing raw evdev devices.]),
-  ([libinput], [1.31.3], [meson, dynamic], [Raw evdev events → pointer/keyboard/touch/gesture events. `libwacom` and `mtdev` support both disabled — see §8.]),
-)
-
-= Two Pivots Phase 2 Forced
-
-== Static linking stops here
-
-Every Phase 1 binary is statically linked — no shared-library management,
-one file copied into the rootfs, done. `dbus` broke that pattern immediately:
-it needs `libexpat` for XML parsing and is not meaningfully staticable.
-Worse, the *rest* of the roadmap sits entirely on the other side of that
-line — Mesa loads GPU drivers as runtime plugins, GTK/Wayland backends get
-`dlopen`'d, and fighting to statically link a graphics stack and a desktop
-environment would mean fighting every upstream build system's own
-assumptions, indefinitely, for no real benefit. This was surfaced as an
-explicit decision rather than made silently, and the answer was to switch:
-Phase 2 onward links dynamically, with the host's own `glibc`
-(`libc.so.6`), `libexpat.so.1`, and (as of `libinput`) `libm.so.6` copied
-into the rootfs's `/lib/x86_64-linux-gnu` alongside `/lib64/ld-linux-x86-64.so.2`
-— confirmed via `ld-linux-x86-64.so.2 --help` to be default, compiled-in
-dynamic-linker search paths on this host, needing no `ld.so.conf`/`ldconfig`
-step to work.
-
-#callout(kind: "info", "Why no ld.so.conf/ldconfig")[
-  ```
-  Shared library search path:
-    (libraries located via /etc/ld.so.cache)
-    /lib/x86_64-linux-gnu (system search path)
-    /usr/lib/x86_64-linux-gnu (system search path)
-    /lib (system search path)
-  ```
-  Both the host libraries and everything the distro builds itself for
-  `/usr/lib/x86_64-linux-gnu` land in a directory the dynamic linker already
-  searches by default on this (Ubuntu) glibc build — no cache file, no
-  config file, no `ldconfig` run against the target rootfs required.
-]
-
-== A staged sysroot, once packages depend on each other
-
-Phase 1's five packages were independent of one another at build time — each
-just needed the host's gcc. Phase 2 is not: `wayland-protocols` needs
-`wayland-scanner` on `PATH` at its *own* configure/build time, and `libinput`
-needs `eudev`'s installed `libudev.pc` to find `libudev` via pkg-config. The
-fix has two parts, and getting the split wrong broke a running daemon before
-it was found.
-
-*Part one — the ordinary case.* Every package is configured with
-`--prefix=/usr` (its normal, final, "as if installed for real" prefix) and
-installed with `DESTDIR=<absolute path to build-distro/sysroot>` — files
-physically land under the sysroot, but the package's own idea of its prefix
-stays `/usr`. `PKG_CONFIG_PATH` points every subsequent package's build at
-the sysroot's installed `.pc` files, and `PKG_CONFIG_SYSROOT_DIR` — pkg-config's
-own built-in mechanism, not something this project wrote — rewrites the
-`-I`/`-L` paths those `.pc` files report from their baked-in `/usr/...` to
-the sysroot's real, on-disk `<sysroot>/usr/...`, automatically, for ordinary
-`Cflags`/`Libs` fields. This is what lets `libinput`'s build actually find and
-link against `eudev`'s freshly-built `libudev`.
-
-#callout(kind: "trap", "The bug this design replaced")[
-  The first version of this pipeline used an absolute sysroot path as
-  `--prefix` for *every* package, reasoning (correctly, for one specific
-  case — see below) that installed `.pc` files need real, resolvable paths.
-  It booted, but `dbus-daemon` immediately crash-looped: `distro-init` kept
-  logging `"dbus-daemon exited, respawning"`, and the actual error was
-  `Failed to open ".../build-distro/sysroot/usr/share/dbus-1/system.conf":
-  No such file or directory` — a literal build-machine path, because `dbus`'s
-  *own compiled-in* default config search path is derived from whatever
-  `--prefix` it was built with, not from `PKG_CONFIG_SYSROOT_DIR` (that only
-  ever affects what *other* packages' builds see when they query `dbus` via
-  pkg-config — it says nothing about what `dbus-daemon` looks up on its own
-  at its own runtime). `eudev` had the identical exposure, undetected only
-  because nothing had yet exercised the affected paths. Caught by the same
-  live QEMU boot check every other milestone in this report went through,
-  not by review.
-]
-
-*Part two — the one real exception.* `wayland-scanner`'s own path is baked
-into `wayland`'s `.pc` file as a *custom* variable
-(`wayland_scanner=${bindir}/wayland-scanner`), and `wayland-protocols`'
-build reads that variable and directly executes whatever path it names.
-Custom variables are exactly the case `PKG_CONFIG_SYSROOT_DIR` does *not*
-rewrite (only `Cflags`/`Libs`, and only for a variable the package itself
-templated with `${pc_sysrootdir}` — `wayland`'s own build doesn't do that for
-this one). With `--prefix=/usr`, the baked path reads the literal string
-`/usr/bin/wayland-scanner`, which does not exist anywhere on this host —
-running it is not optional, `wayland-protocols`' own build does so directly.
-So `wayland` alone is built with a real, absolute, on-disk
-`--prefix=<sysroot>/usr` and installed there directly, no `DESTDIR`. This is
-safe specifically for `wayland`, and not a pattern to reach for by default:
-none of its own *shared libraries* do a prefix-derived runtime lookup the
-way `dbus`/`eudev`'s daemons do — a `.so`'s SONAME-based linking doesn't care
-what `--prefix` built it, only `wayland-scanner`'s baked tool-path variable
-does.
-
-#codepanel(title: "distro/src/stages/userland.rs — the ordinary case (seatd, dbus, eudev, and everything after wayland)")[
-```rust
-fn meson_build_and_install(cfg: &Config, dir: &Path, extra_args: &[&str]) -> Result<()> {
-    let destdir = sysroot_abs(cfg)?;
-    let mut setup = Command::new("meson");
-    setup.arg("setup").arg("build").arg("--prefix=/usr").args(extra_args);
-    sysroot_env(cfg, &mut setup)?;   // PKG_CONFIG_PATH + PKG_CONFIG_SYSROOT_DIR + PATH
-    run_in(dir, &mut setup)?;
-
-    let mut build = Command::new("ninja");
-    build.arg("-C").arg("build");
-    sysroot_env(cfg, &mut build)?;
-    run_in(dir, &mut build)?;
-
-    let mut install = Command::new("ninja");
-    install.arg("-C").arg("build").arg("install");
-    sysroot_env(cfg, &mut install)?;
-    install.env("DESTDIR", destdir);  // real /usr baked in; staged elsewhere on disk
-    run_in(dir, &mut install)
-}
-```
-]
-
-= What's Still Ahead
-
-Unchanged from the project's original roadmap — none of the following has
-been started:
+= What Isn't Part of the Picture Yet
 
 #spec(
-  ("Phase 3", [Graphics, scoped first to QEMU's `virtio-gpu`: Mesa, built against the Wayland-core libraries §5 already produced.]),
-  ("Phase 4", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …), cross-built on the host and copied in like everything in §4–5.]),
+  ("Phase 3", [Graphics, scoped first to QEMU's `virtio-gpu`: Mesa, built against §5's libraries.]),
+  ("Phase 4", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …).]),
   ("Phase 5", [COSMIC itself — `cosmic-comp`, `cosmic-session`, `cosmic-panel`, `cosmic-greeter`, minimal subset first.]),
   ("Phase 6", [Expand: more COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
 )
 
-The single biggest open risk flagged in the original roadmap — whether
-`seatd` alone suffices for a real COSMIC session, or whether
-`systemd`/`logind` ends up unavoidable — remains genuinely open. Phase 2
-proves `seatd` starts and holds a seat; it does not prove COSMIC will accept
-it as `logind`'s replacement.
+And three deliberate gaps in what's already built, worth knowing about
+rather than discovering later:
 
-= Verification Methodology
-
-Every milestone claimed in §4–5 was reproduced live, not inferred from a
-successful compile. The method, unchanged since Phase 1: a Python harness
-opens a PTY (`pty.openpty()`, with `TIOCSWINSZ` set — QEMU's serial console
-renders nothing useful at a 0×0 terminal size), launches
-`qemu-system-x86_64` with the built image attached over `virtio` and OVMF for
-UEFI boot, and drives the console with a small state machine keyed on regexes
-over the accumulated output (`login:`, a shell prompt, a sentinel string
-echoed after each command) rather than fixed sleeps.
-
-#callout(kind: "trap", "A real bug this caught")[
-  `assemble-rootfs` initially failed with "No such file or directory" trying
-  to copy the freshly built `distro-init` binary. Cause: this build host sets
-  `CARGO_TARGET_DIR` to a shared cache outside the repo
-  (`/mnt/rust-cache/target`), which `cargo` honors — so the binary was never
-  at the hardcoded `target/…` path the rootfs-assembly code assumed. Fixed
-  by reading `CARGO_TARGET_DIR` at the same call site cargo itself does.
-  Caught by an actual failing `assemble-rootfs` run, not by review.
-]
-
-#callout(kind: "note", "Known, deliberate gaps")[
-  - uutils' built feature set does not include `grep` or `sed` — despite
-    both names appearing in `rootfs.rs`'s `COREUTILS_APPLETS` symlink list.
-    They aren't part of coreutils' scope upstream in the first place; the
-    symlinks exist but dangle. Not yet fixed.
-  - `libxcb` was not built. Its only real consumer on a Wayland-native
-    target is XWayland compatibility, not currently planned; three more
-    from-source packages (`libxcb` itself, `libXau`, `libXdmcp`) were not
-    worth building for a checklist item with no near-term user.
-  - `mtdev` (legacy multitouch "protocol A" translation) and `libwacom`
-    (tablet identification) were both skipped when building `libinput` —
-    niche hardware support, easy to add back later if a real device needs
-    it.
-  - `libxkbcommon`'s `xkb-config-root` points at the FHS-standard
-    `/usr/share/X11/xkb`, but the `xkeyboard-config` data package that
-    would actually populate that path has not been built — real keymap
-    compilation will not work until it is, which is not needed until
-    Phase 3 has a compositor to test it with.
-]
+- uutils' built feature set does not include `grep` or `sed`, despite both
+  names appearing in `rootfs.rs`'s applet-symlink list — they were never
+  part of coreutils' scope upstream in the first place. The symlinks exist
+  but dangle. Not yet fixed.
+- `libxcb` was never built. Its only real consumer on a Wayland-native
+  target is XWayland compatibility, not currently planned — three more
+  from-source packages (`libxcb`, `libXau`, `libXdmcp`) not worth building
+  for a checklist item with no near-term user.
+- `mtdev` (legacy multitouch) and `libwacom` (tablet identification) were
+  both left out of `libinput` — niche hardware support, easy to add back
+  later if a real device needs it.
