@@ -1,4 +1,4 @@
-use builder_core::stages::KernelChannel;
+use buildpacks::kernel::KernelChannel;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 

@@ -1,21 +1,22 @@
-use crate::config::Config;
 use anyhow::Result;
-use builder_core::stages::KernelChannel;
+use buildpack_core::config::DistroConfig;
+use buildpacks::kernel::KernelChannel;
 use std::path::Path;
 
-/// `distro`'s own wrapper around `builder_core::stages::kernel::latest_release`
-/// — unlike `distroless`, `distro` can't call `builder_core::stages::kernel::resolve_kernel`
-/// directly: that function loads and saves a whole `builder_core::config::Config`,
-/// which doesn't have `distro`'s `bash`/`util_linux`/`shadow`/`seatd`/`dbus`/…
-/// sections, so a save would silently drop them. This loads/mutates/saves
-/// `distro`'s own `Config` instead, reusing only the generic kernel.org
-/// lookup.
+/// `distro`'s own wrapper around `buildpacks::kernel::latest_release` —
+/// patches just the `[kernel]` table's `version`/`url` fields via
+/// `DistroConfig`, rather than a whole-`Config` round-trip through typed
+/// per-package structs `distro` no longer has (see `DistroConfig`'s
+/// untyped `packages` bag).
 pub fn resolve_kernel(config_path: &Path, channel: KernelChannel) -> Result<()> {
-    let (version, url) = builder_core::stages::kernel::latest_release(channel)?;
+    let (version, url) = buildpacks::kernel::latest_release(channel)?;
 
-    let mut cfg = Config::load(config_path)?;
-    cfg.kernel.version = version;
-    cfg.kernel.url = url;
+    let mut cfg = DistroConfig::load(config_path)?;
+    let mut kernel = cfg.package_table("kernel");
+    let table = kernel.as_table_mut().expect("[kernel] is a table");
+    table.insert("version".to_string(), toml::Value::String(version));
+    table.insert("url".to_string(), toml::Value::String(url));
+    cfg.packages.insert("kernel".to_string(), kernel);
     cfg.save(config_path)?;
 
     println!("wrote kernel.version/url to {}", config_path.display());

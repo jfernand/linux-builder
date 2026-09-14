@@ -1,7 +1,7 @@
-use crate::config::Config;
 use crate::stages::buildpacks::install_static_outputs;
 use anyhow::{Context, Result};
-use builder_core::stages::{already_built, run_in};
+use buildpack_core::config::DistroConfig;
+use buildpack_core::run::{already_built, run_in};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -39,7 +39,7 @@ const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";
 /// dynamic linker/libs and login config. `distro-init` mounts proc/sys/dev
 /// itself and supervises `agetty` on the console — no BusyBox-style
 /// `/etc/inittab`/`rcS` needed.
-pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
+pub fn assemble_rootfs(cfg: &DistroConfig, force: bool) -> Result<()> {
     let root = cfg.rootfs_dir();
 
     if already_built(&root.join("sbin/init"), force) {
@@ -53,7 +53,7 @@ pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<
         fs::create_dir_all(root.join(dir)).with_context(|| format!("creating rootfs dir {dir}"))?;
     }
 
-    install_static_outputs(config_path, cfg, &root)?;
+    install_static_outputs(cfg, &root)?;
     install_sysroot(cfg, &root)?;
     install_dynamic_linker_and_host_libs(&root)?;
     write_login_config(&root)?;
@@ -73,7 +73,7 @@ pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<
 /// dynamic-linker search paths on this (Ubuntu) host — confirmed via
 /// `ld-linux-x86-64.so.2 --help` — so this needs no `ld.so.conf`/
 /// `ldconfig` step for any of it to be found at runtime.
-fn install_sysroot(cfg: &Config, root: &Path) -> Result<()> {
+fn install_sysroot(cfg: &DistroConfig, root: &Path) -> Result<()> {
     let sysroot = std::env::current_dir().context("getting current directory")?.join(cfg.sysroot_dir());
     run_in(
         Path::new("."),

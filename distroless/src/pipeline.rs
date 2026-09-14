@@ -6,32 +6,23 @@
 //! `Musl` variant, per `buildpacks::uutils::UutilsVariant`).
 //!
 //! Each package's `BuildCtx` points `sources_dir` at its OLD on-disk
-//! per-package build directory (matching what
-//! `builder_core::config::Config`'s `kernel_build_dir()`/
-//! `busybox_build_dir()`/`uutils_build_dir()` used to compute), so
-//! already-built trees are recognized as-is rather than triggering a
-//! redundant rebuild.
+//! per-package build directory (matching what `builder_core::config::
+//! Config`'s now-unused `kernel_build_dir()`/`busybox_build_dir()`/
+//! `uutils_build_dir()` used to compute), so already-built trees are
+//! recognized as-is rather than triggering a redundant rebuild.
 
 use anyhow::{Context, Result};
-use builder_core::config::Config;
+use buildpack_core::config::DistroConfig;
 use buildpack_core::{BuildCtx, Buildpack, InstallMode};
 use buildpacks::busybox::Busybox;
 use buildpacks::kernel::Kernel;
 use buildpacks::uutils::Uutils;
 use std::path::Path;
 
-fn configured<T: Buildpack + Default>(root: &toml::Value, key: &str) -> Result<T> {
+fn configured<T: Buildpack + Default>(cfg: &DistroConfig, key: &str) -> Result<T> {
     let mut bp = T::default();
-    let empty = toml::Value::Table(Default::default());
-    let table = root.get(key).unwrap_or(&empty);
-    bp.configure(table).with_context(|| format!("configuring buildpack [{key}]"))?;
+    bp.configure(&cfg.package_table(key)).with_context(|| format!("configuring buildpack [{key}]"))?;
     Ok(bp)
-}
-
-fn load_table(config_path: &Path) -> Result<toml::Value> {
-    let text = std::fs::read_to_string(config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    toml::from_str(&text).with_context(|| format!("parsing {}", config_path.display()))
 }
 
 fn jobs() -> usize {
@@ -41,7 +32,7 @@ fn jobs() -> usize {
 /// `sources_dir` defaults to `build_dir` itself (matching uutils' old
 /// `uutils_build_dir()`, which has no version-numbered subdirectory) —
 /// `ctx_for` overrides it per-package below.
-fn base_ctx(cfg: &Config) -> BuildCtx {
+fn base_ctx(cfg: &DistroConfig) -> BuildCtx {
     BuildCtx {
         sources_dir: cfg.build_dir.clone(),
         build_dir: cfg.build_dir.clone(),
@@ -50,19 +41,19 @@ fn base_ctx(cfg: &Config) -> BuildCtx {
         arch: cfg.image.arch.clone(),
         networking: cfg.networking,
         jobs: jobs(),
+        image: cfg.image.clone(),
     }
 }
 
-fn ctx_with_sources(cfg: &Config, subdir: &str) -> BuildCtx {
+fn ctx_with_sources(cfg: &DistroConfig, subdir: &str) -> BuildCtx {
     BuildCtx { sources_dir: cfg.build_dir.join(subdir), ..base_ctx(cfg) }
 }
 
-pub fn kernel_buildpack(config_path: &Path) -> Result<Kernel> {
-    let root = load_table(config_path)?;
-    configured(&root, "kernel")
+pub fn kernel_buildpack(cfg: &DistroConfig) -> Result<Kernel> {
+    configured(cfg, "kernel")
 }
 
-pub fn kernel_ctx(cfg: &Config) -> BuildCtx {
+pub fn kernel_ctx(cfg: &DistroConfig) -> BuildCtx {
     ctx_with_sources(cfg, "kernel")
 }
 
@@ -71,15 +62,15 @@ pub fn kernel_ctx(cfg: &Config) -> BuildCtx {
 /// `build-kernel`/`menu-config`/`list-features` CLI commands (see
 /// `kernel_buildpack`/`kernel_ctx` above), so fetch/build below skip it
 /// by id rather than it being left out of this list entirely.
-fn all_packages(root: &toml::Value) -> Result<Vec<Box<dyn Buildpack>>> {
+pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
     Ok(vec![
-        Box::new(configured::<Kernel>(root, "kernel")?),
-        Box::new(configured::<Uutils>(root, "uutils")?.into_musl()),
-        Box::new(configured::<Busybox>(root, "busybox")?),
+        Box::new(configured::<Kernel>(cfg, "kernel")?),
+        Box::new(configured::<Uutils>(cfg, "uutils")?.into_musl()),
+        Box::new(configured::<Busybox>(cfg, "busybox")?),
     ])
 }
 
-fn ctx_for(id: &str, cfg: &Config) -> BuildCtx {
+fn ctx_for(id: &str, cfg: &DistroConfig) -> BuildCtx {
     match id {
         "kernel" => kernel_ctx(cfg),
         "busybox" => ctx_with_sources(cfg, "busybox"),
@@ -90,9 +81,8 @@ fn ctx_for(id: &str, cfg: &Config) -> BuildCtx {
 /// Fetches uutils + busybox — no build step (the kernel has its own
 /// `fetch()` via `kernel_buildpack`/`kernel_ctx`, called separately,
 /// before this). Called by `distroless fetch`.
-pub fn fetch_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
-    let root = load_table(config_path)?;
-    for pack in all_packages(&root)?.iter().filter(|p| p.id() != "kernel") {
+pub fn fetch_new_packages(cfg: &DistroConfig, force: bool) -> Result<()> {
+    for pack in all_packages(cfg)?.iter().filter(|p| p.id() != "kernel") {
         let ctx = ctx_for(pack.id(), cfg);
         pack.fetch(&ctx, force).with_context(|| format!("fetching buildpack {}", pack.id()))?;
     }
@@ -102,9 +92,8 @@ pub fn fetch_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Resu
 /// Fetches and builds uutils + busybox, kernel excluded (staged
 /// separately via its own `build-kernel` command, always run first).
 /// Called by `distroless build-userland`.
-pub fn build_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
-    let root = load_table(config_path)?;
-    let packs = all_packages(&root)?;
+pub fn build_new_packages(cfg: &DistroConfig, force: bool) -> Result<()> {
+    let packs = all_packages(cfg)?;
     let order = buildpack_core::graph::topo_order(&packs)?;
 
     for &i in &order {
@@ -130,9 +119,8 @@ pub fn build_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Resu
 
 /// Copies every `StaticArtifacts` package's declared outputs (and their
 /// symlinks) into the rootfs.
-pub fn install_static_outputs(config_path: &Path, cfg: &Config, root: &Path) -> Result<()> {
-    let root_toml = load_table(config_path)?;
-    for pack in &all_packages(&root_toml)? {
+pub fn install_static_outputs(cfg: &DistroConfig, root: &Path) -> Result<()> {
+    for pack in &all_packages(cfg)? {
         if !matches!(pack.install_mode(), InstallMode::StaticArtifacts) {
             continue;
         }

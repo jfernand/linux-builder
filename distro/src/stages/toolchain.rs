@@ -1,5 +1,5 @@
 use anyhow::Result;
-use builder_core::stages::run;
+use buildpack_core::run::run;
 use std::process::Command;
 
 /// Mesa (Phase 3) needs a newer meson than Ubuntu 24.04's own `apt` package

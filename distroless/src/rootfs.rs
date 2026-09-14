@@ -6,13 +6,13 @@
 
 use crate::pipeline::install_static_outputs;
 use anyhow::{Context, Result};
-use builder_core::config::Config;
-use builder_core::stages::already_built;
+use buildpack_core::config::DistroConfig;
+use buildpack_core::run::already_built;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
+pub fn assemble_rootfs(cfg: &DistroConfig, force: bool) -> Result<()> {
     let root = cfg.rootfs_dir();
 
     if already_built(&root.join("etc/inittab"), force) {
@@ -26,7 +26,7 @@ pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<
         fs::create_dir_all(root.join(dir)).with_context(|| format!("creating rootfs dir {dir}"))?;
     }
 
-    install_static_outputs(config_path, cfg, &root)?;
+    install_static_outputs(cfg, &root)?;
     install_kernel_modules(cfg, &root)?;
     write_config_files(cfg, &root)?;
     if cfg.networking {
@@ -36,12 +36,18 @@ pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<
     Ok(())
 }
 
-fn install_kernel_modules(cfg: &Config, root: &Path) -> Result<()> {
-    let kernel_dir = cfg.build_dir.join("kernel").join(format!("linux-{}", cfg.kernel.version));
+fn install_kernel_modules(cfg: &DistroConfig, root: &Path) -> Result<()> {
+    let version = cfg
+        .packages
+        .get("kernel")
+        .and_then(|t| t.get("version"))
+        .and_then(|v| v.as_str())
+        .context("missing kernel.version in config")?;
+    let kernel_dir = cfg.build_dir.join("kernel").join(format!("linux-{version}"));
     let modules_dest = root.join("lib/modules");
     fs::create_dir_all(&modules_dest)?;
 
-    builder_core::stages::run(
+    buildpack_core::run::run(
         Command::new("make")
             .current_dir(&kernel_dir)
             .arg(format!(
@@ -52,7 +58,7 @@ fn install_kernel_modules(cfg: &Config, root: &Path) -> Result<()> {
     )
 }
 
-fn write_config_files(cfg: &Config, root: &Path) -> Result<()> {
+fn write_config_files(cfg: &DistroConfig, root: &Path) -> Result<()> {
     fs::write(root.join("etc/hostname"), format!("{}\n", cfg.image.hostname))?;
 
     fs::write(
