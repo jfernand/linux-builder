@@ -25,6 +25,7 @@ pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_shadow(cfg, force)?;
     build_seatd(cfg, force)?;
     build_dbus(cfg, force)?;
+    build_eudev(cfg, force)?;
     build_init(force)?;
     Ok(())
 }
@@ -248,6 +249,42 @@ fn build_dbus(cfg: &Config, force: bool) -> Result<()> {
 
     println!("building dbus");
     run_in(&dir, Command::new("ninja").arg("-C").arg("build"))?;
+
+    Ok(())
+}
+
+/// eudev is a systemd-independent fork of udev (what Alpine/Void/Gentoo
+/// use without systemd) — needed for libudev, which libinput hard-depends
+/// on. Unlike seatd/dbus it's autotools, not meson. blkid/SELinux/kmod
+/// support are all disabled: our rootfs has no libblkid.so or libselinux
+/// to link against (util-linux's libblkid was built statically for
+/// Phase 1's static tools, not as a shared library), and no loadable
+/// kernel modules to manage.
+fn build_eudev(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.eudev_build_dir();
+    let binary = dir.join("src").join("udev").join("udevd");
+
+    if already_built(&binary, force) {
+        println!("skip build-eudev: {} already exists", binary.display());
+        return Ok(());
+    }
+
+    println!("configuring eudev in {}", dir.display());
+    run_in(
+        &dir,
+        Command::new("sh").arg("configure").args([
+            "--prefix=/usr",
+            "--sysconfdir=/etc",
+            "--libdir=/usr/lib/x86_64-linux-gnu",
+            "--disable-blkid",
+            "--disable-selinux",
+            "--disable-kmod",
+            "--disable-manpages",
+        ]),
+    )?;
+
+    println!("building eudev");
+    run_in(&dir, Command::new("make").arg(format!("-j{}", num_cpus())))?;
 
     Ok(())
 }
