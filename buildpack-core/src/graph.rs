@@ -3,8 +3,10 @@
 //! today's hand-maintained sequential call order.
 
 use crate::Buildpack;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
+use std::process::Command;
 
 /// Returns indices into `packs`, in an order that respects every declared
 /// dependency edge (a dependency's index always precedes its dependents').
@@ -56,6 +58,47 @@ pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
     }
 
     Ok(order)
+}
+
+/// Renders `packs`' dependency graph as Graphviz DOT source — an edge per
+/// declared `dependencies()` entry, pointing from prerequisite to
+/// dependent (the same direction `topo_order` builds its adjacency in).
+pub fn to_dot(packs: &[Box<dyn Buildpack>]) -> String {
+    let mut dot = String::from("digraph buildpacks {\n    rankdir=LR;\n    node [shape=box];\n");
+    for pack in packs {
+        dot.push_str(&format!("    \"{}\";\n", pack.id()));
+        for dep in pack.dependencies() {
+            dot.push_str(&format!("    \"{}\" -> \"{}\";\n", dep, pack.id()));
+        }
+    }
+    dot.push_str("}\n");
+    dot
+}
+
+/// Writes `packs`' dependency graph as an SVG to `path`, via the `dot`
+/// command (graphviz). Meant to be called on every real build run, not
+/// just on request — a standing, always-current picture of what depends
+/// on what, since `dependencies()` is the only place that graph is
+/// declared today (no separate diagram to keep in sync by hand).
+pub fn write_svg(packs: &[Box<dyn Buildpack>], path: &Path) -> Result<()> {
+    let dot = to_dot(packs);
+    let output = Command::new("dot")
+        .args(["-Tsvg"])
+        .arg("-o")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child.stdin.take().unwrap().write_all(dot.as_bytes())?;
+            child.wait_with_output()
+        })
+        .with_context(|| format!("running dot -Tsvg -o {}", path.display()))?;
+    if !output.status.success() {
+        bail!("dot failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
