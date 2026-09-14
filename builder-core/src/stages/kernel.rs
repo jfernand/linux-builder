@@ -411,7 +411,17 @@ struct Release {
 /// Looks up the current stable or long-term-support release from
 /// kernel.org's release feed and writes its version/url into the config
 /// file's `[kernel]` section, so `fetch`/`build-kernel` pick it up as-is.
-pub fn resolve_kernel(config_path: &Path, channel: KernelChannel) -> Result<()> {
+/// Looks up the current stable or long-term-support release from
+/// kernel.org's own release feed and returns its (version, source-tarball-url).
+/// Generic over which distro's config type ends up storing the result —
+/// `resolve_kernel` below is the `builder_core::config::Config`-specific
+/// wrapper `distroless` uses directly; a distro with its own config type
+/// (e.g. `distro`) calls this instead and writes the result into its own
+/// `Config` itself, since loading/saving a whole `builder_core::config::Config`
+/// against a config file with a different shape would either fail to parse
+/// (missing fields) or silently drop every section this function doesn't
+/// know about on save.
+pub fn latest_release(channel: KernelChannel) -> Result<(String, String)> {
     let moniker = match channel {
         KernelChannel::Stable => "stable",
         KernelChannel::Lts => "longterm",
@@ -437,10 +447,15 @@ pub fn resolve_kernel(config_path: &Path, channel: KernelChannel) -> Result<()> 
     let source = release.source.expect("filtered to Some above");
 
     println!("using kernel {} ({source})", release.version);
+    Ok((release.version, source))
+}
+
+pub fn resolve_kernel(config_path: &Path, channel: KernelChannel) -> Result<()> {
+    let (version, url) = latest_release(channel)?;
 
     let mut cfg = Config::load(config_path)?;
-    cfg.kernel.version = release.version;
-    cfg.kernel.url = source;
+    cfg.kernel.version = version;
+    cfg.kernel.url = url;
     cfg.save(config_path)?;
 
     println!("wrote kernel.version/url to {}", config_path.display());
