@@ -26,6 +26,13 @@ pub fn build_userland(cfg: &Config, force: bool) -> Result<()> {
     build_seatd(cfg, force)?;
     build_dbus(cfg, force)?;
     build_eudev(cfg, force)?;
+    build_wayland(cfg, force)?;
+    build_wayland_protocols(cfg, force)?;
+    build_libxkbcommon(cfg, force)?;
+    build_pixman(cfg, force)?;
+    build_libdisplay_info(cfg, force)?;
+    build_libevdev(cfg, force)?;
+    build_libinput(cfg, force)?;
     build_init(force)?;
     Ok(())
 }
@@ -173,6 +180,78 @@ fn build_shadow(cfg: &Config, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Absolute path to `cfg.sysroot_dir()` itself (not `.../usr`) — used as
+/// both `DESTDIR` for a normal staged install and as `PKG_CONFIG_SYSROOT_DIR`
+/// (see `sysroot_env`).
+fn sysroot_abs(cfg: &Config) -> Result<std::path::PathBuf> {
+    Ok(std::env::current_dir().context("getting current directory")?.join(cfg.sysroot_dir()))
+}
+
+/// Points `PKG_CONFIG_PATH` at the sysroot's installed `.pc` files so a
+/// package's build can find an earlier one — libinput needs eudev's
+/// `libudev.pc`, for instance — and sets `PKG_CONFIG_SYSROOT_DIR` so the
+/// `-I`/`-L` paths pkg-config reports for those `.pc` files get rewritten
+/// from their baked-in `/usr/...` to the sysroot's real, on-disk
+/// `<sysroot>/usr/...` (this is pkg-config's own built-in sysroot handling,
+/// automatic for `Cflags`/`Libs`; it does *not* extend to arbitrary custom
+/// `.pc` variables, which is exactly the problem `build_wayland` below
+/// works around separately). `PATH` gets the sysroot's `bin`/`sbin` too,
+/// as a general safety net for any `find_program('some-tool')` by bare
+/// name. Applied to every meson/configure/ninja/make invocation from here
+/// on, not just the ones that need it yet, since which package needs which
+/// earlier one only grows from here.
+fn sysroot_env(cfg: &Config, cmd: &mut Command) -> Result<()> {
+    let sysroot = sysroot_abs(cfg)?;
+    let pkg_config_path = format!(
+        "{}:{}",
+        sysroot.join("usr/lib/x86_64-linux-gnu/pkgconfig").display(),
+        sysroot.join("usr/share/pkgconfig").display(),
+    );
+    let path = format!(
+        "{}:{}:{}",
+        sysroot.join("usr/bin").display(),
+        sysroot.join("usr/sbin").display(),
+        std::env::var("PATH").unwrap_or_default(),
+    );
+    cmd.env("PKG_CONFIG_PATH", pkg_config_path)
+        .env("PKG_CONFIG_SYSROOT_DIR", &sysroot)
+        .env("PATH", path);
+    Ok(())
+}
+
+/// `meson setup <build_dir>/build --prefix=/usr <extra_args>`, then
+/// `ninja -C <build_dir>/build install` with `DESTDIR` set to the
+/// sysroot — configure, build, and install-to-sysroot in one step, since
+/// nothing downstream needs the unconfigured or built-but-not-installed
+/// states separately. `--prefix=/usr` (the *final* runtime path, not the
+/// sysroot's own on-disk location) matters for any package whose binary
+/// does its own prefix-derived path lookups at its own runtime — dbus
+/// looks for its `system.conf` under the prefix it was built with, and a
+/// sysroot-absolute prefix would bake in a build-time-only path that
+/// doesn't exist once the binary is copied into the final rootfs (this
+/// broke dbus-daemon in exactly this way before `DESTDIR` replaced a
+/// direct sysroot prefix here). See `build_wayland` for the one exception.
+fn meson_build_and_install(cfg: &Config, dir: &std::path::Path, extra_args: &[&str]) -> Result<()> {
+    let destdir = sysroot_abs(cfg)?;
+    let mut setup = Command::new("meson");
+    setup.arg("setup").arg("build").arg("--prefix=/usr").args(extra_args);
+    sysroot_env(cfg, &mut setup)?;
+    run_in(dir, &mut setup)?;
+
+    let mut build = Command::new("ninja");
+    build.arg("-C").arg("build");
+    sysroot_env(cfg, &mut build)?;
+    run_in(dir, &mut build)?;
+
+    let mut install = Command::new("ninja");
+    install.arg("-C").arg("build").arg("install");
+    sysroot_env(cfg, &mut install)?;
+    install.env("DESTDIR", destdir);
+    run_in(dir, &mut install)?;
+
+    Ok(())
+}
+
 /// seatd is the first thing built here with meson/ninja instead of
 /// autotools — and, per its own README, "Depends only on libc," so it
 /// could in principle still be statically linked. It's built dynamically
@@ -180,31 +259,25 @@ fn build_shadow(cfg: &Config, force: bool) -> Result<()> {
 /// switch away from Phase 1's all-static approach).
 fn build_seatd(cfg: &Config, force: bool) -> Result<()> {
     let dir = cfg.seatd_build_dir();
-    let build_dir = dir.join("build");
-    let binary = build_dir.join("seatd");
+    let binary = dir.join("build").join("seatd");
 
     if already_built(&binary, force) {
         println!("skip build-seatd: {} already exists", binary.display());
         return Ok(());
     }
 
-    println!("configuring seatd in {}", dir.display());
-    run_in(
+    println!("configuring/building/installing seatd in {}", dir.display());
+    meson_build_and_install(
+        cfg,
         &dir,
-        Command::new("meson").arg("setup").arg("build").args([
-            "--prefix=/usr",
+        &[
             "-Dlibseat-logind=disabled",
             "-Dlibseat-seatd=enabled",
             "-Dserver=enabled",
             "-Dman-pages=disabled",
             "-Dexamples=disabled",
-        ]),
-    )?;
-
-    println!("building seatd");
-    run_in(&dir, Command::new("ninja").arg("-C").arg("build"))?;
-
-    Ok(())
+        ],
+    )
 }
 
 /// dbus is the first genuinely dynamically-linked dependency in the
@@ -213,19 +286,18 @@ fn build_seatd(cfg: &Config, force: bool) -> Result<()> {
 /// linker/dependency-copying machinery this introduces).
 fn build_dbus(cfg: &Config, force: bool) -> Result<()> {
     let dir = cfg.dbus_build_dir();
-    let build_dir = dir.join("build");
-    let binary = build_dir.join("bus").join("dbus-daemon");
+    let binary = dir.join("build").join("bus").join("dbus-daemon");
 
     if already_built(&binary, force) {
         println!("skip build-dbus: {} already exists", binary.display());
         return Ok(());
     }
 
-    println!("configuring dbus in {}", dir.display());
-    run_in(
+    println!("configuring/building/installing dbus in {}", dir.display());
+    meson_build_and_install(
+        cfg,
         &dir,
-        Command::new("meson").arg("setup").arg("build").args([
-            "--prefix=/usr",
+        &[
             // Our rootfs has no "messagebus" user (or any non-root user
             // yet) for the daemon to drop privileges to, so it runs and
             // stays as root; /run over the default /var/local/run so the
@@ -244,13 +316,33 @@ fn build_dbus(cfg: &Config, force: bool) -> Result<()> {
             "-Dqt_help=disabled",
             "-Dmodular_tests=disabled",
             "-Dasserts=false",
-        ]),
-    )?;
+        ],
+    )
+}
 
-    println!("building dbus");
-    run_in(&dir, Command::new("ninja").arg("-C").arg("build"))?;
+/// `<config>/configure --prefix=/usr <extra_args>`, then `make -jN` and
+/// `make install DESTDIR=<sysroot>` — the autotools equivalent of
+/// `meson_build_and_install`, for eudev (and anything else Phase 2+ pulls
+/// in that isn't meson). Same `--prefix=/usr`-not-sysroot-absolute
+/// reasoning applies: eudev's own `udevd` looks up its rules/hwdb
+/// directories relative to the prefix it was configured with.
+fn autotools_build_and_install(cfg: &Config, dir: &std::path::Path, extra_args: &[&str]) -> Result<()> {
+    let destdir = sysroot_abs(cfg)?;
+    let mut configure = Command::new("sh");
+    configure.arg("configure").arg("--prefix=/usr").args(extra_args);
+    sysroot_env(cfg, &mut configure)?;
+    run_in(dir, &mut configure)?;
 
-    Ok(())
+    let mut make = Command::new("make");
+    make.arg(format!("-j{}", num_cpus()));
+    sysroot_env(cfg, &mut make)?;
+    run_in(dir, &mut make)?;
+
+    let mut install = Command::new("make");
+    install.arg("install");
+    sysroot_env(cfg, &mut install)?;
+    install.env("DESTDIR", destdir);
+    run_in(dir, &mut install)
 }
 
 /// eudev is a systemd-independent fork of udev (what Alpine/Void/Gentoo
@@ -269,24 +361,205 @@ fn build_eudev(cfg: &Config, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("configuring eudev in {}", dir.display());
-    run_in(
+    println!("configuring/building/installing eudev in {}", dir.display());
+    autotools_build_and_install(
+        cfg,
         &dir,
-        Command::new("sh").arg("configure").args([
-            "--prefix=/usr",
+        &[
             "--sysconfdir=/etc",
             "--libdir=/usr/lib/x86_64-linux-gnu",
             "--disable-blkid",
             "--disable-selinux",
             "--disable-kmod",
             "--disable-manpages",
-        ]),
-    )?;
+        ],
+    )
+}
 
-    println!("building eudev");
-    run_in(&dir, Command::new("make").arg(format!("-j{}", num_cpus())))?;
+/// Base Wayland: wire protocol libraries (client/server/cursor/egl) and
+/// `wayland-scanner`, the code generator every later Wayland-protocol
+/// package (wayland-protocols, and eventually the compositor) invokes at
+/// its own build time.
+///
+/// Built and installed differently from every other Phase 2+ package:
+/// with a real, absolute, on-disk `--prefix=<sysroot>/usr` and a *direct*
+/// install (no `DESTDIR`), rather than `--prefix=/usr` staged via
+/// `DESTDIR` like everything else. Reason: `wayland-scanner`'s own path
+/// gets baked as a custom pkg-config variable
+/// (`wayland_scanner=${bindir}/wayland-scanner`) that — unlike ordinary
+/// `Cflags`/`Libs` — pkg-config's `PKG_CONFIG_SYSROOT_DIR` does *not*
+/// rewrite (that only happens for variables the package itself templated
+/// with `${pc_sysrootdir}`, which wayland's own build doesn't do for this
+/// one). wayland-protocols' build reads that variable and directly
+/// executes whatever path it names — with `--prefix=/usr`, that would be
+/// the literal string `/usr/bin/wayland-scanner`, which does not exist
+/// anywhere on this host. An absolute sysroot prefix makes the baked path
+/// genuinely resolve to a real file instead. This is safe specifically
+/// for wayland because nothing in its own *shared libraries* does a
+/// prefix-derived runtime lookup the way dbus/eudev's daemons do — a
+/// `.so`'s SONAME-based linking doesn't care what `--prefix` built it.
+fn build_wayland(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.wayland_build_dir();
+    let binary = dir.join("build").join("src").join("wayland-scanner");
 
-    Ok(())
+    if already_built(&binary, force) {
+        println!("skip build-wayland: {} already exists", binary.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing wayland in {}", dir.display());
+    let prefix = format!("{}/usr", sysroot_abs(cfg)?.display());
+
+    let mut setup = Command::new("meson");
+    setup
+        .arg("setup")
+        .arg("build")
+        .arg(format!("--prefix={prefix}"))
+        .args(["-Ddocumentation=false", "-Dtests=false", "-Ddtd_validation=false"]);
+    sysroot_env(cfg, &mut setup)?;
+    run_in(&dir, &mut setup)?;
+
+    let mut build = Command::new("ninja");
+    build.arg("-C").arg("build");
+    sysroot_env(cfg, &mut build)?;
+    run_in(&dir, &mut build)?;
+
+    let mut install = Command::new("ninja");
+    install.arg("-C").arg("build").arg("install");
+    sysroot_env(cfg, &mut install)?;
+    run_in(&dir, &mut install)
+}
+
+/// The Wayland protocol XML definitions themselves (xdg-shell and
+/// friends) — no library, just data + a pkg-config file Phase 3's
+/// compositor build reads to find them. Needs `wayland-scanner` (built
+/// above) at its own build time to validate/process a couple of them.
+fn build_wayland_protocols(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.wayland_protocols_build_dir();
+    let marker = dir.join("build").join("meson-private").join("wayland-protocols.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-wayland-protocols: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing wayland-protocols in {}", dir.display());
+    meson_build_and_install(cfg, &dir, &["-Dtests=false"])
+}
+
+/// Keymap compilation (turns e.g. "us, evdev, pc105" into the actual
+/// lookup tables a compositor hands to clients). X11 support is disabled
+/// since we don't build libxcb (see the fetch.rs/config.rs comment on
+/// that decision) — only XWayland compatibility would need it, and that's
+/// not planned. `xkb-config-root` is pinned to the FHS-standard path
+/// `/usr/share/X11/xkb` rather than whatever the host happens to have
+/// installed (meson's default probes the *host's* pkg-config for
+/// `xkeyboard-config` and would otherwise bake in a host path that won't
+/// exist in the rootfs); the actual xkeyboard-config data package isn't
+/// built yet, so real keymap compilation won't work until it is — not
+/// needed until Phase 3 has a compositor to test it with.
+fn build_libxkbcommon(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.libxkbcommon_build_dir();
+    let marker = dir.join("build").join("meson-private").join("xkbcommon.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-libxkbcommon: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing libxkbcommon in {}", dir.display());
+    meson_build_and_install(
+        cfg,
+        &dir,
+        &[
+            "-Denable-x11=false",
+            "-Denable-docs=false",
+            "-Dxkb-config-root=/usr/share/X11/xkb",
+        ],
+    )
+}
+
+/// Software rasterization — used both as Mesa's software fallback path
+/// and directly by some compositor code for operations not worth doing on
+/// the GPU.
+fn build_pixman(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.pixman_build_dir();
+    let marker = dir.join("build").join("meson-private").join("pixman-1.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-pixman: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing pixman in {}", dir.display());
+    meson_build_and_install(
+        cfg,
+        &dir,
+        &["-Dtests=disabled", "-Ddemos=disabled", "-Dgtk=disabled", "-Dlibpng=disabled", "-Dopenmp=disabled"],
+    )
+}
+
+/// EDID/DisplayID parsing — how a compositor reads a monitor's own
+/// description of its supported modes. No build options to speak of.
+fn build_libdisplay_info(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.libdisplay_info_build_dir();
+    let marker = dir.join("build").join("meson-private").join("libdisplay-info.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-libdisplay-info: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing libdisplay-info in {}", dir.display());
+    meson_build_and_install(cfg, &dir, &[])
+}
+
+/// libinput's mandatory dependency for reading/writing raw evdev input
+/// devices.
+fn build_libevdev(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.libevdev_build_dir();
+    let marker = dir.join("build").join("meson-private").join("libevdev.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-libevdev: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing libevdev in {}", dir.display());
+    meson_build_and_install(cfg, &dir, &["-Dtests=disabled", "-Ddocumentation=disabled"])
+}
+
+/// Turns raw evdev events into the pointer/keyboard/touch/gesture events
+/// a compositor actually wants — the last of Phase 2's libraries, and the
+/// reason eudev exists in this pipeline at all (libinput hard-depends on
+/// libudev). libwacom (tablet identification) and mtdev (legacy
+/// multitouch "protocol A" device translation — effectively unused on any
+/// hardware built in the last decade) are both deliberately skipped:
+/// niche hardware support not worth two more from-source packages for
+/// Phase 2's "does the plumbing work" milestone. Lua plugin support is
+/// off for the same reason (no lua on the target yet).
+fn build_libinput(cfg: &Config, force: bool) -> Result<()> {
+    let dir = cfg.libinput_build_dir();
+    let marker = dir.join("build").join("meson-private").join("libinput.pc");
+
+    if already_built(&marker, force) {
+        println!("skip build-libinput: {} already exists", marker.display());
+        return Ok(());
+    }
+
+    println!("configuring/building/installing libinput in {}", dir.display());
+    meson_build_and_install(
+        cfg,
+        &dir,
+        &[
+            "-Dlibwacom=false",
+            "-Dmtdev=false",
+            "-Ddebug-gui=false",
+            "-Dtests=false",
+            "-Ddocumentation=false",
+            "-Dlua-plugins=disabled",
+        ],
+    )
 }
 
 fn build_init(force: bool) -> Result<()> {
