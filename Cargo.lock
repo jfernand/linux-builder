@@ -151,6 +151,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "buildpack-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "buildpacks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "buildpack-core",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
