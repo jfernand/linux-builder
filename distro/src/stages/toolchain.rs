@@ -3,18 +3,33 @@ use builder_core::stages::run;
 use std::process::Command;
 
 /// Ensures the host build tools needed to compile the from-scratch
-/// userland (bash today; util-linux/shadow-utils once that slice of
-/// Phase 1 is built) are present. Unlike distroless's musl cross-toolchain,
-/// this is all native — the host's own gcc/make/autotools.
+/// userland are present: gcc/make/autotools for the autotools-based
+/// projects (bash, util-linux, shadow-utils), plus meson/ninja/pkg-config
+/// for the meson-based ones starting in Phase 2 (seatd, dbus, and later
+/// the Wayland stack). `libexpat1-dev` is dbus's one build-time library
+/// dependency (XML parsing) — the built dbus-daemon links it dynamically
+/// and we copy the host's libexpat.so into the rootfs at assemble-rootfs
+/// time, same as every other dynamic dependency from here on. Unlike
+/// distroless's musl cross-toolchain, this is all native — the host's own
+/// gcc/glibc.
 pub fn build_toolchain() -> Result<()> {
-    if have("gcc") && have("make") {
+    if have("gcc") && have("make") && have("meson") && have("ninja") && have("pkg-config") {
         println!("build tools already installed");
         return Ok(());
     }
 
-    println!("installing build-essential via apt (requires sudo)");
+    println!("installing build tools via apt (requires sudo)");
     run(Command::new("sudo").args(["apt-get", "update"]))?;
-    run(Command::new("sudo").args(["apt-get", "install", "-y", "build-essential"]))?;
+    run(Command::new("sudo").args([
+        "apt-get",
+        "install",
+        "-y",
+        "build-essential",
+        "meson",
+        "ninja-build",
+        "pkg-config",
+        "libexpat1-dev",
+    ]))?;
     Ok(())
 }
 
