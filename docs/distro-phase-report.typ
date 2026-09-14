@@ -24,7 +24,7 @@
     ("Workspace", [Cargo workspace: #cd[builder-core] (lib) · #cd[distroless] (musl/BusyBox) · #cd[distro] (glibc/from-scratch) · #cd[distro-init] (PID 1)]),
     ("Target", [Native #cd[x86_64-unknown-linux-gnu] — host toolchain, no cross-compilation]),
     ("Coverage", [Everything built and QEMU-verified through Phase 2 — a real kernel, real login, seat/session daemons, Wayland-core libraries]),
-    ("Not covered", [Phases 3–6: a compositor, GPU drivers, a Rust toolchain on-target, COSMIC itself — see §6]),
+    ("Not covered", [Phases 3–6: a compositor, GPU drivers, a Rust toolchain on-target, COSMIC itself — see §7]),
   ),
 )
 
@@ -50,11 +50,12 @@ same way a bootstrap compiler is infrastructure for a self-hosting language.
 
 #spec(
   ("§ 2", [The boot sequence — what actually happens, in order, from power-on to a shell.]),
-  ("§ 3", [The static base: coreutils, shell, login — one binary in, no shared-library bookkeeping.]),
-  ("§ 4", [The seat/session layer: seatd, dbus, eudev — what each one actually does.]),
-  ("§ 5", [The Wayland-core libraries — built, installed, not yet used by anything.]),
-  ("§ 6", [How it's all actually built: the pipeline, the config file, the sysroot.]),
-  ("§ 7", [What isn't part of the picture yet.]),
+  ("§ 3", [The kernel — the config baseline, the feature packs, and how to pick a version.]),
+  ("§ 4", [The static base: coreutils, shell, login — one binary in, no shared-library bookkeeping.]),
+  ("§ 5", [The seat/session layer: seatd, dbus, eudev — what each one actually does.]),
+  ("§ 6", [The Wayland-core libraries — built, installed, not yet used by anything.]),
+  ("§ 7", [How it's all actually built: the pipeline, the config file, the sysroot.]),
+  ("§ 8", [What isn't part of the picture yet.]),
 )
 
 = The Boot Sequence
@@ -88,7 +89,7 @@ writes its own init (§2.2) that does five things and nothing else.
   session, not inferred from source reading: `login: root` → no password
   prompt → `-bash-5.2#` → `dbus-send --system … ListNames` returns a real
   reply → `udevadm info --query=all --name=/dev/tty1` returns a populated
-  device entry. See §6.4 for the harness.
+  device entry. See §7.4 for the harness.
 ]
 
 == Why a custom init at all
@@ -130,6 +131,87 @@ the parent) — `dbus-daemon --nofork` and `udevd` with no `-d` suppress that,
 so they stay `distro-init`'s direct children and its `waitpid` loop actually
 sees them exit if they crash.
 
+= The Kernel
+
+Step 2 of §2's boot table — the kernel itself — is built by
+`builder-core::stages::kernel`, the same code `distroless` uses unchanged.
+`distro`'s own `distro.toml` names a version and a download URL
+(currently 6.17, from kernel.org) under `[kernel]`; `distro build-kernel`
+fetches, configures, and compiles it.
+
+== Where the starting config comes from
+
+There are two starting points, chosen by whether `kernel.config_file` is
+set in the config file:
+
+- *No `config_file` (the default, and what `distro` currently uses).* Runs
+  `make defconfig` — the kernel's own "reasonable defaults for this
+  architecture" config — and then strips it down: every option belonging to
+  one of the named feature packs below gets turned off, regardless of
+  whether `defconfig` turned it on. Everything defconfig sets that *isn't*
+  owned by a pack (PCI, ACPI, EFI boot, block/ATA/virtio, ext4/vfat, the
+  console) is left exactly as defconfig set it — only the packs are
+  deliberately stripped, not the boot-essential baseline.
+- *`config_file` set.* A previously saved `.config` (produced by an
+  interactive `make menuconfig` session — see below) is used as-is, only
+  re-resolved via `make olddefconfig` in case it predates a kernel upgrade.
+  Nothing gets stripped: whoever hand-picked that config already decided
+  what they wanted.
+
+Either way, whatever packs are named in `kernel.features` get turned back on
+as the final step — so even a hand-edited `config_file` can still request
+named packs on top of it, without needing to know the underlying
+`CONFIG_*` symbols.
+
+== The feature packs
+
+Fourteen named bundles, each just a curated list of Kconfig options one
+`kernel.features` entry away from being switched on as a unit:
+
+#dtable(
+  columns: (auto, 1fr),
+  align: (left, left),
+  ([Pack], [What it turns on]),
+  ([`graphics`], [DRM/KMS graphics + fbdev console (i915, virtio-gpu, bochs, AGP) instead of plain VGA text.]),
+  ([`sound`], [ALSA sound subsystem and the Intel HDA driver.]),
+  ([`wireless`], [The Wi-Fi stack (cfg80211/mac80211) and rfkill.]),
+  ([`hid-extras`], [Per-vendor HID quirk drivers (Sony, Samsung, Gyration, …) and the hiddev/hidraw userspace interfaces — generic USB HID keyboards/mice work without this.]),
+  ([`legacy-nics`], [Dedicated Ethernet chipset drivers (Tigon3, Tulip, E100/E1000(E), Sky2, Forcedeth, 8139too, R8169) for real hardware — QEMU's virtio-net always works without this.]),
+  ([`legacy-buses`], [PCMCIA/CardBus (Yenta) and legacy PATA chipset drivers — AHCI/virtio-blk always work without this.]),
+  ([`network-fs`], [NFS (client + root-over-NFS), 9P, and autofs.]),
+  ([`netfilter`], [Connection tracking, NAT, and iptables — only useful if this box routes or firewalls traffic.]),
+  ([`security-extras`], [Disk quotas, POSIX ACLs, and SELinux.]),
+  ([`iommu`], [AMD/Intel IOMMU support — only needed for PCI passthrough or running this as a virtualization host.]),
+  ([`debug`], [Kernel debug instrumentation (Magic SysRq, schedstats, block-IO tracing, boot-param/entry debug) — useful while bringing up boot, dead weight once stable.]),
+  ([`ia32-emulation`], [Run 32-bit x86 binaries on this 64-bit kernel.]),
+  ([`iso9660`], [ISO9660/Joliet/zisofs filesystem support, for booting or mounting optical media images.]),
+  ([`boot-logo`], [Framebuffer console + boot-time Linux logo (the stock penguin, or a custom image via `kernel.logo_file` — must be an 80×80, ASCII/P3 PPM with at most 224 colors, the kernel's own logo converter's hard requirement).]),
+)
+
+#callout(kind: "note", "distro's current kernel.features: none")[
+  `distro.toml` sets no `kernel.features` at all — every pack above is off,
+  which is why `distro`'s kernel today is the fully stripped `defconfig`
+  baseline. Phase 3 (Mesa/graphics) will need at least `graphics` turned on;
+  the original project roadmap expects most of these packs on for a real
+  desktop eventually, none of that has happened yet.
+]
+
+== Picking a version, and hand-tuning the config
+
+`builder-core::stages::kernel` also provides `resolve_kernel()` (looks up
+the current stable or long-term-support release from kernel.org's own
+release feed and writes its version/URL into the config file) and
+`menuconfig()` (runs an interactive `make menuconfig` against the fetched
+sources, then saves the result for reuse as `kernel.config_file`) — both
+generic, shared code. `distroless`'s CLI exposes them directly
+(`distroless resolve-kernel --channel stable`, `distroless menu-config
+--save-to kernel.config`, `distroless list-features`); `distro`'s CLI
+currently does not wire up equivalent subcommands, so picking a kernel
+version or hand-tuning the config for `distro` means editing `distro.toml`
+directly rather than going through a CLI command — a gap inherited from
+`distro`'s CLI being scaffolded thinner than `distroless`'s in Phase 0, not
+a limitation of `builder-core` itself.
+
 = The Static Base
 
 Five packages exist purely to get from a mounted rootfs to a real,
@@ -159,7 +241,7 @@ equivalent to reach for.
   columns: (auto, auto, auto, 1fr),
   align: (left, left, left, left),
   ([Package], [Version], [Provides], [Why it's there]),
-  ([uutils/coreutils], [git `main`], [`ls`, `cat`, `cp`, …], [A Rust reimplementation of GNU coreutils — one multi-call binary, symlinked under every applet name. The built feature set is a curated subset (see §7), not the full set.]),
+  ([uutils/coreutils], [git `main`], [`ls`, `cat`, `cp`, …], [A Rust reimplementation of GNU coreutils — one multi-call binary, symlinked under every applet name. The built feature set is a curated subset (see §8), not the full set.]),
   ([bash], [5.2.37], [`/bin/bash`, `/bin/sh`], [The login shell named in `/etc/passwd`.]),
   ([util-linux], [2.41.2], [`agetty`, `mount`, `umount`], [Built with `--disable-all-programs` plus explicit `--enable-*` for just these three — util-linux ships dozens of tools, only these are needed.]),
   ([shadow-utils], [4.17.4], [`login`, `passwd`], [Real `/etc/passwd` + `/etc/shadow` authentication — not BusyBox's separate empty-password mechanism, genuine shadow-file semantics.]),
@@ -169,8 +251,8 @@ All five are *statically linked* — `--disable-shared --enable-static` at
 configure time, `LDFLAGS=-all-static` at `make` time (plain `-static` alone
 breaks configure's own compiler sanity check once libtool is involved). One
 binary compiled, one binary copied into the rootfs, nothing else to track.
-This is why they sit apart from everything in §4–5: dynamic linking doesn't
-enter the picture until `dbus` (§4), which needs `libexpat` and isn't
+This is why they sit apart from everything in §5–6: dynamic linking doesn't
+enter the picture until `dbus` (§5), which needs `libexpat` and isn't
 meaningfully staticable.
 
 #callout(kind: "trap", "A dispatch bug specific to this build")[
@@ -214,7 +296,7 @@ compositor stands on, not decoration.
   ([Package], [Version], [What it actually does]),
   ([seatd], [0.9.3], [Owns `/dev/input/*` and `/dev/dri/*` on behalf of whatever process asks nicely over its socket, so a compositor doesn't need to run as root to touch a keyboard or a GPU. Its own README says it "depends only on libc" — the systemd-`logind` alternative, chosen explicitly over pulling in systemd (see the callout below).]),
   ([dbus], [1.16.2], [The system message bus every desktop component uses to talk to every other one. Runs as `root` here (`-Ddbus_user=root`) — the rootfs has no unprivileged `messagebus` user yet to drop privileges to.]),
-  ([eudev], [3.2.14], [A systemd-independent fork of `udev` (what Alpine, Void, and Gentoo use without systemd) — walks `/sys`, builds a device database, and exposes it as `libudev`. Exists in this pipeline for one specific reason: `libinput` (§5) hard-depends on `libudev`, and there is no way around that dependency.]),
+  ([eudev], [3.2.14], [A systemd-independent fork of `udev` (what Alpine, Void, and Gentoo use without systemd) — walks `/sys`, builds a device database, and exposes it as `libudev`. Exists in this pipeline for one specific reason: `libinput` (§6) hard-depends on `libudev`, and there is no way around that dependency.]),
 )
 
 #callout(kind: "info", "seatd instead of systemd — an open question, not a closed one")[
@@ -246,17 +328,17 @@ observable."
   ([Package], [Version], [What it's for]),
   ([wayland], [1.26.0], [The core wire-protocol libraries (client, server, cursor, EGL) and `wayland-scanner`, the code generator every later Wayland package runs at its own build time.]),
   ([wayland-protocols], [1.49], [The actual protocol definitions — `xdg-shell` and the rest — as XML. No library of its own, just data plus a pkg-config file.]),
-  ([libxkbcommon], [1.12.4], [Turns "us, evdev, pc105" into the keymap tables a compositor hands to clients. X11 support is off (no `libxcb` — see §7); real keymap compilation needs the `xkeyboard-config` data package, also not built yet.]),
+  ([libxkbcommon], [1.12.4], [Turns "us, evdev, pc105" into the keymap tables a compositor hands to clients. X11 support is off (no `libxcb` — see §8); real keymap compilation needs the `xkeyboard-config` data package, also not built yet.]),
   ([pixman], [0.46.4], [Software rasterization — Mesa's fallback path, and some compositor-side operations not worth sending to the GPU.]),
   ([libdisplay-info], [0.4.0], [Parses a monitor's own EDID/DisplayID — how a compositor learns what resolutions and refresh rates a display actually supports.]),
   ([libevdev], [1.13.7], [Reads and writes raw evdev input-device events. `libinput`'s one mandatory dependency.]),
-  ([libinput], [1.31.3], [Turns raw evdev events into the pointer/keyboard/touch/gesture events a compositor actually wants. `libwacom` (tablets) and `mtdev` (legacy multitouch) are both left out — see §7.]),
+  ([libinput], [1.31.3], [Turns raw evdev events into the pointer/keyboard/touch/gesture events a compositor actually wants. `libwacom` (tablets) and `mtdev` (legacy multitouch) are both left out — see §8.]),
 )
 
 The dependency order between them is also the build order: `wayland` first
 (nothing else here can build without `wayland-scanner`), then
 `wayland-protocols` (needs `wayland-scanner` on `PATH`), then the rest, with
-`libinput` last since it needs both `eudev`'s `libudev` (§4) and `libevdev`.
+`libinput` last since it needs both `eudev`'s `libudev` (§5) and `libevdev`.
 
 = How It's Actually Built
 
@@ -265,7 +347,7 @@ The dependency order between them is also the build order: `wayland` first
 `distro.toml` is not one monolithic struct. `distro`'s `Config` composes the
 pieces that are genuinely identical to `distroless` (`KernelConfig`,
 `ImageConfig`, `UutilsConfig`, all from `builder-core`) with a `[section]`
-per package in §3–5 — each just a `version` and a source `url`, plus one
+per package in §4–6 — each just a `version` and a source `url`, plus one
 `build_dir()` helper method per package computing exactly where its tarball
 extracts to.
 
@@ -276,7 +358,7 @@ extracts to.
 distro fetch                    # download + extract every source tarball
 distro build-toolchain          # apt-get the host build tools (once)
 distro build-kernel              # builder-core, unchanged from distroless
-distro build-userland            # every package in §3, §4, and §5
+distro build-userland            # every package in §4, §5, and §6
 distro assemble-rootfs           # merge it all into build-distro/rootfs
 distro make-image                # partition + GRUB + write the disk image
 distro test-qemu [--window]      # boot it
@@ -285,23 +367,23 @@ distro all                       # the whole pipeline, in order
 ```
 ]
 
-`build-userland` is where §3–5's packages actually compile — each package
+`build-userland` is where §4–6's packages actually compile — each package
 gets its own `build_<name>` function in `distro/src/stages/userland.rs`,
 called in dependency order. `assemble-rootfs` then builds the actual root
-filesystem tree: coreutils and its applet symlinks, bash, the §3 static
-binaries, the §4–5 dynamic ones (via the sysroot, below), the host's own
+filesystem tree: coreutils and its applet symlinks, bash, the §4 static
+binaries, the §5–6 dynamic ones (via the sysroot, below), the host's own
 `libc.so.6`/`libexpat.so.1`/`libm.so.6` and dynamic linker (confirmed via
 `ld-linux-x86-64.so.2 --help` to already be on glibc's default search path
 here — no `ldconfig` step needed), `distro-init` itself as `/sbin/init`, and
 `/etc/passwd`+`/etc/shadow`.
 
-== The sysroot: how packages in §4–5 find each other
+== The sysroot: how packages in §5–6 find each other
 
 Phase 1's five packages never needed each other at build time — each just
-needed the host's gcc. §4–5's packages do: `wayland-protocols` needs
+needed the host's gcc. §5–6's packages do: `wayland-protocols` needs
 `wayland-scanner` on `PATH` at its own build time, and `libinput` needs
 `eudev`'s installed `libudev.pc` to link against `libudev` at all. Every
-package in §4–5 is therefore built with `--prefix=/usr` (its normal, final,
+package in §5–6 is therefore built with `--prefix=/usr` (its normal, final,
 "as if genuinely installed" prefix) and installed with
 `DESTDIR=<build-distro/sysroot>` — files physically land under the sysroot,
 but the package's own compiled-in idea of its prefix stays `/usr`, which
@@ -355,7 +437,7 @@ echoed after each command — rather than fixed sleeps.
 = What Isn't Part of the Picture Yet
 
 #spec(
-  ("Phase 3", [Graphics, scoped first to QEMU's `virtio-gpu`: Mesa, built against §5's libraries.]),
+  ("Phase 3", [Graphics, scoped first to QEMU's `virtio-gpu`: Mesa, built against §6's libraries.]),
   ("Phase 4", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …).]),
   ("Phase 5", [COSMIC itself — `cosmic-comp`, `cosmic-session`, `cosmic-panel`, `cosmic-greeter`, minimal subset first.]),
   ("Phase 6", [Expand: more COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
