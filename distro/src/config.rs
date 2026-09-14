@@ -26,6 +26,8 @@ pub struct Config {
     pub libdisplay_info: LibdisplayInfoConfig,
     pub libevdev: LibevdevConfig,
     pub libinput: LibinputConfig,
+    pub libdrm: LibdrmConfig,
+    pub mesa: MesaConfig,
     pub image: ImageConfig,
     #[serde(default = "default_build_dir")]
     pub build_dir: PathBuf,
@@ -115,6 +117,25 @@ pub struct LibevdevConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LibinputConfig {
+    pub version: String,
+    pub url: String,
+}
+
+// Phase 3: the graphics stack, scoped to QEMU's virtio-gpu first.
+
+/// The kernel-userspace ioctl wrapper library every GPU-facing library
+/// (Mesa included) builds on.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LibdrmConfig {
+    pub version: String,
+    pub url: String,
+}
+
+/// Built scoped to the `virgl`/`softpipe` gallium drivers only — real GPU
+/// drivers (Intel/AMD/nouveau) are explicitly out of scope until this
+/// QEMU/virtio-gpu milestone works (see the roadmap's Phase 3).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MesaConfig {
     pub version: String,
     pub url: String,
 }
@@ -221,6 +242,23 @@ impl Config {
 
     pub fn libinput_build_dir(&self) -> PathBuf {
         self.build_dir.join("libinput").join(format!("libinput-{}", self.libinput.version))
+    }
+
+    /// GitLab appends the tag's target commit SHA to libdrm's archive
+    /// directory name specifically (unlike pixman's/libevdev's own clean
+    /// `<name>-<name>-<version>/` GitLab-archive naming) — a per-project,
+    /// per-tag quirk, not something derivable from the version alone.
+    /// Literal, not templated with `self.libdrm.version`: bumping the
+    /// version here means updating this whole string, since the hash is
+    /// only valid for the exact tag it names.
+    pub fn libdrm_build_dir(&self) -> PathBuf {
+        self.build_dir
+            .join("libdrm")
+            .join("libdrm-libdrm-2.4.134-e984d448b8b17aab853369e6c203e53719f46de1")
+    }
+
+    pub fn mesa_build_dir(&self) -> PathBuf {
+        self.build_dir.join("mesa").join(format!("mesa-mesa-{}", self.mesa.version))
     }
 
     /// Staging install prefix all of Phase 2's meson/autotools packages
