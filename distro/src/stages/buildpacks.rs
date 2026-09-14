@@ -131,10 +131,18 @@ pub fn kernel_ctx(cfg: &Config) -> BuildCtx {
     ctx_with_sources(cfg, "kernel")
 }
 
-/// The full non-kernel package list, in registration order (irrelevant —
-/// `topo_order` sorts it for real).
+/// Every package `distro` builds, kernel included — it's a real
+/// `Buildpack` like everything else here, just one with its own dedicated
+/// `build-kernel`/`menu-config`/`list-features` CLI commands (see
+/// `kernel_buildpack`/`kernel_ctx` above) rather than running through this
+/// list's generic fetch/build. Callers that need to skip it for that
+/// CLI-staging reason (kernel builds first and separately, since it's far
+/// too expensive to redo needlessly) filter it out themselves below; the
+/// dependency graph and rootfs install pass use the full list as-is. In
+/// registration order (irrelevant — `topo_order` sorts it for real).
 fn all_packages(root: &toml::Value) -> Result<Vec<Box<dyn Buildpack>>> {
     Ok(vec![
+        Box::new(configured::<Kernel>(root, "kernel")?),
         Box::new(configured::<Uutils>(root, "uutils")?),
         Box::new(configured::<Bash>(root, "bash")?),
         Box::new(configured::<UtilLinux>(root, "util_linux")?),
@@ -164,37 +172,47 @@ fn all_packages(root: &toml::Value) -> Result<Vec<Box<dyn Buildpack>>> {
 }
 
 /// Fetches every package but the kernel (which has its own `fetch()` via
-/// `kernel_buildpack`/`kernel_ctx`, called separately) — no build step.
-/// What `distro fetch` calls.
+/// `kernel_buildpack`/`kernel_ctx`, called separately, before this) — no
+/// build step. What `distro fetch` calls.
 pub fn fetch_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
     let root = load_table(config_path)?;
     let packs = all_packages(&root)?;
-    for pack in &packs {
+    for pack in packs.iter().filter(|p| p.id() != "kernel") {
         let ctx = ctx_for(pack.id(), cfg);
         pack.fetch(&ctx, force).with_context(|| format!("fetching buildpack {}", pack.id()))?;
     }
     Ok(())
 }
 
-/// Fetches and builds every package but the kernel, in dependency order.
-/// This is what `distro build-userland` actually calls now.
+/// Fetches and builds every package but the kernel, in dependency order —
+/// the kernel build is staged separately (its own `build-kernel` command,
+/// always run first) since it's far too expensive to fold into this
+/// generic loop's `already_built` check. This is what `distro
+/// build-userland` actually calls now.
 pub fn build_new_packages(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
     let root = load_table(config_path)?;
     let packs = all_packages(&root)?;
     let order = buildpack_core::graph::topo_order(&packs)?;
 
+    for &i in &order {
+        let pack = &packs[i];
+        if pack.id() == "kernel" {
+            continue;
+        }
+        let ctx = ctx_for(pack.id(), cfg);
+        pack.fetch(&ctx, force).with_context(|| format!("fetching buildpack {}", pack.id()))?;
+        pack.build(&ctx, force).with_context(|| format!("building buildpack {}", pack.id()))?;
+    }
+
+    // Unlike the fetch/build loop above, the graph is drawn from the full
+    // package list, kernel included — it's a real Buildpack like
+    // everything else here, just one that this pipeline stage doesn't
+    // itself fetch/build.
     let svg_path = cfg.build_dir.join("dependency-graph.svg");
     if let Err(e) = buildpack_core::graph::write_svg(&packs, |id| ctx_for(id, cfg), &svg_path) {
         println!("warning: couldn't write dependency graph SVG: {e}");
     } else {
         println!("wrote dependency graph to {}", svg_path.display());
-    }
-
-    for &i in &order {
-        let pack = &packs[i];
-        let ctx = ctx_for(pack.id(), cfg);
-        pack.fetch(&ctx, force).with_context(|| format!("fetching buildpack {}", pack.id()))?;
-        pack.build(&ctx, force).with_context(|| format!("building buildpack {}", pack.id()))?;
     }
 
     Ok(())
