@@ -1,0 +1,149 @@
+//! Dependency-order resolution: a real topological sort (Kahn's
+//! algorithm) over each buildpack's declared `dependencies()`, replacing
+//! today's hand-maintained sequential call order.
+
+use crate::Buildpack;
+use anyhow::{bail, Result};
+use std::collections::{HashMap, VecDeque};
+
+/// Returns indices into `packs`, in an order that respects every declared
+/// dependency edge (a dependency's index always precedes its dependents').
+/// Errors if a declared dependency id isn't present in `packs`, or if the
+/// dependency graph has a cycle.
+pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
+    let index_of: HashMap<&'static str, usize> =
+        packs.iter().enumerate().map(|(i, p)| (p.id(), i)).collect();
+
+    // adjacency: dependency -> dependents (edges point from prerequisite to
+    // the thing that needs it, matching build order)
+    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); packs.len()];
+    let mut in_degree: Vec<usize> = vec![0; packs.len()];
+
+    for (i, pack) in packs.iter().enumerate() {
+        for dep_id in pack.dependencies() {
+            let &dep_idx = index_of.get(dep_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "buildpack '{}' declares unknown dependency '{}'",
+                    pack.id(),
+                    dep_id
+                )
+            })?;
+            adjacency[dep_idx].push(i);
+            in_degree[i] += 1;
+        }
+    }
+
+    let mut queue: VecDeque<usize> =
+        (0..packs.len()).filter(|&i| in_degree[i] == 0).collect();
+    let mut order = Vec::with_capacity(packs.len());
+
+    while let Some(i) = queue.pop_front() {
+        order.push(i);
+        for &next in &adjacency[i] {
+            in_degree[next] -= 1;
+            if in_degree[next] == 0 {
+                queue.push_back(next);
+            }
+        }
+    }
+
+    if order.len() != packs.len() {
+        let stuck: Vec<&str> = (0..packs.len())
+            .filter(|&i| in_degree[i] > 0)
+            .map(|i| packs[i].id())
+            .collect();
+        bail!("dependency cycle detected among: {}", stuck.join(", "));
+    }
+
+    Ok(order)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BuildCtx, BuildOutput, Description, InstallMode, Source};
+    use anyhow::Result;
+    use std::any::Any;
+
+    struct Stub {
+        id: &'static str,
+        deps: &'static [&'static str],
+    }
+
+    impl Buildpack for Stub {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn configure(&mut self, _table: &toml::Value) -> Result<()> {
+            Ok(())
+        }
+        fn dependencies(&self) -> &'static [&'static str] {
+            self.deps
+        }
+        fn describe(&self) -> Description {
+            Description { id: self.id, name: self.id, summary: "", long_description: "" }
+        }
+        fn sources(&self, _ctx: &BuildCtx) -> Vec<Source> {
+            Vec::new()
+        }
+        fn build(&self, _ctx: &BuildCtx, _force: bool) -> Result<()> {
+            Ok(())
+        }
+        fn outputs(&self, _ctx: &BuildCtx) -> Vec<BuildOutput> {
+            Vec::new()
+        }
+        fn install_mode(&self) -> InstallMode {
+            InstallMode::StaticArtifacts
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    fn stub(id: &'static str, deps: &'static [&'static str]) -> Box<dyn Buildpack> {
+        Box::new(Stub { id, deps })
+    }
+
+    fn assert_before(order: &[usize], packs: &[Box<dyn Buildpack>], first: &str, second: &str) {
+        let pos = |id: &str| order.iter().position(|&i| packs[i].id() == id).unwrap();
+        assert!(pos(first) < pos(second), "{first} should come before {second}");
+    }
+
+    #[test]
+    fn linear_chain() {
+        let packs = vec![stub("a", &[]), stub("b", &["a"]), stub("c", &["b"])];
+        let order = topo_order(&packs).unwrap();
+        assert_eq!(order.len(), 3);
+        assert_before(&order, &packs, "a", "b");
+        assert_before(&order, &packs, "b", "c");
+    }
+
+    #[test]
+    fn diamond() {
+        // mesa depends on libdrm and wayland; both depend on nothing here,
+        // shaped like the real libdrm/wayland/mesa relationship.
+        let packs = vec![
+            stub("libdrm", &[]),
+            stub("wayland", &[]),
+            stub("mesa", &["libdrm", "wayland"]),
+        ];
+        let order = topo_order(&packs).unwrap();
+        assert_eq!(order.len(), 3);
+        assert_before(&order, &packs, "libdrm", "mesa");
+        assert_before(&order, &packs, "wayland", "mesa");
+    }
+
+    #[test]
+    fn cycle_detected() {
+        let packs = vec![stub("a", &["b"]), stub("b", &["a"])];
+        let err = topo_order(&packs).unwrap_err();
+        assert!(err.to_string().contains("cycle"));
+    }
+
+    #[test]
+    fn unknown_dependency_errors() {
+        let packs = vec![stub("a", &["nonexistent"])];
+        let err = topo_order(&packs).unwrap_err();
+        assert!(err.to_string().contains("unknown dependency"));
+    }
+}
