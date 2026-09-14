@@ -125,7 +125,7 @@ impl Buildpack for UtilLinux {
             if self.cfg.full { "full" } else { "agetty+mount only" },
             dir.display()
         );
-        autotools_build_static(&dir, configure_args, &[("LDFLAGS", "-all-static")])
+        autotools_build_static(&dir, configure_args, &[], &[("LDFLAGS", "-all-static")])
     }
 
     fn outputs(&self, ctx: &BuildCtx) -> Vec<BuildOutput> {

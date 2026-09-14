@@ -116,15 +116,26 @@ pub fn autotools_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&st
 /// produce a standalone static binary in-place, consumed later by an
 /// explicit rootfs copy rather than installed via DESTDIR.
 ///
-/// `make_vars` are passed as `make`-time command-line variable
-/// assignments (e.g. `LDFLAGS=-all-static`), NOT as configure-time env —
-/// libtool's fully-static flag has to be make-time: configure's own
+/// `configure_env` is set as environment on the `configure` invocation
+/// (e.g. bash's plain `LDFLAGS=-static`, which — unlike util-linux/
+/// shadow's libtool-mediated `-all-static` — configure-time is fine
+/// for). `make_vars` are passed as `make`-time command-line variable
+/// assignments instead (e.g. `LDFLAGS=-all-static`): libtool's fully-static
+/// flag has to be make-time, not configure-time — configure's own
 /// compiler sanity check calls gcc directly, before libtool is set up to
 /// translate the flag, so gcc itself rejects it as invalid ("C compiler
 /// cannot create executables") if it's set that early.
-pub fn autotools_build_static(dir: &Path, extra_args: &[&str], make_vars: &[(&str, &str)]) -> Result<()> {
+pub fn autotools_build_static(
+    dir: &Path,
+    extra_args: &[&str],
+    configure_env: &[(&str, &str)],
+    make_vars: &[(&str, &str)],
+) -> Result<()> {
     let mut configure = Command::new("sh");
     configure.arg("configure").args(extra_args);
+    for (k, v) in configure_env {
+        configure.env(k, v);
+    }
     run_in(dir, &mut configure)?;
 
     let mut make = Command::new("make");
@@ -133,6 +144,16 @@ pub fn autotools_build_static(dir: &Path, extra_args: &[&str], make_vars: &[(&st
         make.arg(format!("{k}={v}"));
     }
     run_in(dir, &mut make)
+}
+
+/// Cargo's actual output directory for a build run from `source_dir` —
+/// normally `source_dir/target`, but cargo honors `CARGO_TARGET_DIR` when
+/// set (e.g. to a shared build cache outside the repo), which overrides
+/// that per-project default entirely.
+pub fn cargo_target_dir(source_dir: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| source_dir.join("target"))
 }
 
 pub fn cargo_build_release(dir: &Path, target: &str, extra_args: &[&str], env: &[(&str, &str)]) -> Result<()> {
