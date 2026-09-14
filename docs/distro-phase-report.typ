@@ -196,21 +196,35 @@ Fourteen named bundles, each just a curated list of Kconfig options one
   desktop eventually, none of that has happened yet.
 ]
 
-== Picking a version, and hand-tuning the config
+== What's exposed by each CLI
 
-`builder-core::stages::kernel` also provides `resolve_kernel()` (looks up
-the current stable or long-term-support release from kernel.org's own
-release feed and writes its version/URL into the config file) and
-`menuconfig()` (runs an interactive `make menuconfig` against the fetched
-sources, then saves the result for reuse as `kernel.config_file`) — both
-generic, shared code. `distroless`'s CLI exposes them directly
-(`distroless resolve-kernel --channel stable`, `distroless menu-config
---save-to kernel.config`, `distroless list-features`); `distro`'s CLI
-currently does not wire up equivalent subcommands, so picking a kernel
-version or hand-tuning the config for `distro` means editing `distro.toml`
-directly rather than going through a CLI command — a gap inherited from
-`distro`'s CLI being scaffolded thinner than `distroless`'s in Phase 0, not
-a limitation of `builder-core` itself.
+Everything in §3.1–3.2 lives in `builder-core::stages::kernel` as generic,
+shared code — both distros' kernels are configured by the same functions.
+What differs is how much of it each CLI actually puts a command in front
+of, versus leaving as "edit the TOML file yourself":
+
+#dtable(
+  columns: (auto, auto, auto),
+  align: (left, left, left),
+  ([Capability], [`distroless`], [`distro`]),
+  ([Fetch kernel source], [`fetch [--clean]`], [`fetch`]),
+  ([Build the kernel], [`build-kernel`], [`build-kernel`]),
+  ([Pick a version from kernel.org], [`resolve-kernel --channel <stable\|lts>`], [not exposed — edit `[kernel] version`/`url` in `distro.toml` by hand]),
+  ([Interactive `make menuconfig`], [`menu-config --save-to <path>`], [not exposed — no way to reach an interactive config session]),
+  ([List the available feature packs], [`list-features`], [not exposed — see the table in §3.2 instead]),
+  ([Turn feature packs on], [`kernel.features = [...]` in the config file], [same: `kernel.features = [...]` in `distro.toml` — config-file level support is identical]),
+  ([Custom boot logo], [`kernel.logo_file` in the config file], [same, `kernel.logo_file` in `distro.toml`]),
+  ([Force any stage to rerun], [global `--force` flag], [global `--force` flag]),
+  ([Interactive dashboard], [`tui` — a full terminal UI for every stage plus USB writing], [no equivalent]),
+)
+
+The three rows marked "not exposed" are a CLI gap, not a capability gap —
+`resolve_kernel()` and `menuconfig()` in `builder-core` don't care which
+distro calls them, and `distro`'s own `Config` struct already has the same
+`kernel.features`/`kernel.config_file`/`kernel.logo_file` fields
+`distroless`'s does (§3.1–3.2 work identically for both once the TOML is
+edited by hand). `distro`'s CLI was scaffolded thinner than `distroless`'s
+in Phase 0 and nothing has come back to add the missing subcommands since.
 
 = The Static Base
 
