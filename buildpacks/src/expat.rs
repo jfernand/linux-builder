@@ -62,7 +62,8 @@ impl Buildpack for Expat {
 
     fn build(&self, ctx: &BuildCtx, force: bool) -> anyhow::Result<()> {
         let dir = self.build_dir(ctx);
-        let marker = dir.join(".libs").join("libexpat.a");
+        // expat's library code lives under lib/, not the top level.
+        let marker = dir.join("lib").join(".libs").join("libexpat.a");
 
         if already_built(&marker, force) {
             println!("skip build-expat: {} already exists", marker.display());
