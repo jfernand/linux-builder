@@ -494,6 +494,11 @@ fn build_libxkbcommon(cfg: &Config, force: bool) -> Result<()> {
             "-Denable-x11=false",
             "-Denable-docs=false",
             "-Dxkb-config-root=/usr/share/X11/xkb",
+            // libxkbregistry (XDG-style layout enumeration, e.g. for a
+            // settings UI) needs libxml2, which we don't build ourselves —
+            // not needed for keymap compilation itself, so left out rather
+            // than adding a whole extra from-source package for it.
+            "-Denable-xkbregistry=false",
         ],
     )
 }
