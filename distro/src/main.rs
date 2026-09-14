@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     let cfg = Config::load(&cli.config)?;
 
     match cli.command {
-        Command::Fetch => stages::fetch::fetch(&cfg, cli.force),
+        Command::Fetch => fetch(&cli.config, &cfg, cli.force),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
         Command::ResolveKernel { channel } => stages::kernel::resolve_kernel(&cli.config, channel),
         Command::BuildKernel => build_kernel(&cli.config, &cfg, cli.force),
@@ -22,11 +22,8 @@ fn main() -> Result<()> {
             let bp = stages::buildpacks::kernel_buildpack(&cli.config)?;
             bp.menuconfig(&stages::buildpacks::kernel_ctx(&cfg), &save_to)
         }
-        Command::BuildUserland => {
-            stages::userland::build_userland(&cfg, cli.force)?;
-            stages::buildpacks::build_new_packages(&cli.config, &cfg, cli.force)
-        }
-        Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
+        Command::BuildUserland => stages::buildpacks::build_new_packages(&cli.config, &cfg, cli.force),
+        Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cli.config, &cfg, cli.force),
         Command::MakeImage => builder_core::stages::image::make_image(&cfg.to_builder_core(), cli.force),
         Command::TestQemu { window } => builder_core::stages::qemu::test_qemu(&cfg.to_builder_core(), window),
         Command::ListDevices => list_devices(),
@@ -36,18 +33,23 @@ fn main() -> Result<()> {
     }
 }
 
+fn fetch(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
+    let kernel = stages::buildpacks::kernel_buildpack(config_path)?;
+    kernel.fetch(&stages::buildpacks::kernel_ctx(cfg), force)?;
+    stages::buildpacks::fetch_new_packages(config_path, cfg, force)
+}
+
 fn build_kernel(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
     let bp = stages::buildpacks::kernel_buildpack(config_path)?;
     bp.build(&stages::buildpacks::kernel_ctx(cfg), force)
 }
 
 fn run_all(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
-    stages::fetch::fetch(cfg, force)?;
+    fetch(config_path, cfg, force)?;
     stages::toolchain::build_toolchain()?;
     build_kernel(config_path, cfg, force)?;
-    stages::userland::build_userland(cfg, force)?;
     stages::buildpacks::build_new_packages(config_path, cfg, force)?;
-    stages::rootfs::assemble_rootfs(cfg, force)?;
+    stages::rootfs::assemble_rootfs(config_path, cfg, force)?;
     builder_core::stages::image::make_image(&cfg.to_builder_core(), force)?;
     println!("done. run `distro test-qemu` to boot the image in QEMU.");
     Ok(())

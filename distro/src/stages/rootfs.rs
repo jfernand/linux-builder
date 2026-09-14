@@ -1,21 +1,19 @@
 use crate::config::Config;
-use crate::stages::buildpacks::{util_linux_buildpack, util_linux_ctx};
-use crate::stages::userland::{init_binary_path, shadow_binary_path, uutils_binary_path};
+use crate::stages::buildpacks::install_static_outputs;
 use anyhow::{Context, Result};
-use buildpack_core::Buildpack;
 use builder_core::stages::{already_built, run_in};
 use std::fs;
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
 /// Host system libraries our dynamically-linked binaries (dbus, seatd,
 /// libinput, Mesa, ...) need at runtime but that our own build doesn't
 /// produce — copied straight from the host, since we compile natively
-/// against the host's own glibc (see the config.rs/userland.rs comments on
-/// "we are the distro" via the host toolchain, not a cross one).
-/// `libgcc_s`/`libstdc++` come from Mesa's C++ gallium code, `libz`/
-/// `libzstd` from its compression use, `libffi` from libwayland-client's
+/// against the host's own glibc (see config.rs's comments on "we are the
+/// distro" via the host toolchain, not a cross one). `libgcc_s`/
+/// `libstdc++` come from Mesa's C++ gallium code, `libz`/`libzstd` from
+/// its compression use, `libffi` from libwayland-client's
 /// wire-marshalling — the last of these was actually a latent Phase 2 gap
 /// (libwayland-client has needed it since it was first built), just never
 /// caught because nothing exercised it at runtime until Mesa's EGL now
@@ -33,22 +31,15 @@ const HOST_DYNAMIC_LIBS: &[&str] = &[
 const HOST_LIB_DIR: &str = "/lib/x86_64-linux-gnu";
 const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";
 
-/// Utilities exposed from the uutils multi-call binary. Not exhaustive,
-/// just enough for a usable minimal shell environment — same starting
-/// list `distroless` uses, since uutils supports the same applets
-/// regardless of target libc.
-const COREUTILS_APPLETS: &[&str] = &[
-    "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "echo", "pwd", "touch", "chmod", "chown",
-    "ln", "grep", "sed", "head", "tail", "sort", "uniq", "wc", "find", "env", "true", "false",
-    "test", "[", "df", "du", "date", "uname", "sleep", "kill", "ps",
-];
-
-/// Assembles the root filesystem tree: uutils/coreutils, bash, util-linux's
-/// `agetty`/`mount`/`umount`, shadow-utils' `login`/`passwd`, and our own
-/// `distro-init` as `/sbin/init`. `distro-init` mounts proc/sys/dev itself
-/// and supervises `agetty` on the console — no BusyBox-style
+/// Assembles the root filesystem tree: every `StaticArtifacts` buildpack's
+/// declared outputs (uutils/coreutils, bash, util-linux's `agetty`/
+/// `mount`/`umount`, shadow-utils' `login`/`passwd`, `distro-init` as
+/// `/sbin/init`) copied in directly, the whole shared sysroot (every
+/// `Sysroot`-mode buildpack) bulk-copied in one `cp -a`, plus the host
+/// dynamic linker/libs and login config. `distro-init` mounts proc/sys/dev
+/// itself and supervises `agetty` on the console — no BusyBox-style
 /// `/etc/inittab`/`rcS` needed.
-pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
+pub fn assemble_rootfs(config_path: &Path, cfg: &Config, force: bool) -> Result<()> {
     let root = cfg.rootfs_dir();
 
     if already_built(&root.join("sbin/init"), force) {
@@ -62,81 +53,25 @@ pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
         fs::create_dir_all(root.join(dir)).with_context(|| format!("creating rootfs dir {dir}"))?;
     }
 
-    install_coreutils(cfg, &root)?;
-    install_bash(cfg, &root)?;
-    install_util_linux(cfg, &root)?;
-    install_shadow(cfg, &root)?;
+    install_static_outputs(config_path, cfg, &root)?;
     install_sysroot(cfg, &root)?;
     install_dynamic_linker_and_host_libs(&root)?;
-    install_init(&root)?;
     write_login_config(&root)?;
 
     Ok(())
 }
 
-fn install_coreutils(cfg: &Config, root: &Path) -> Result<()> {
-    let src = uutils_binary_path(cfg);
-    let dest = root.join("bin/coreutils");
-    fs::copy(&src, &dest).with_context(|| format!("copying {} to {}", src.display(), dest.display()))?;
-
-    for applet in COREUTILS_APPLETS {
-        let link = root.join("bin").join(applet);
-        let _ = fs::remove_file(&link);
-        symlink("coreutils", &link).with_context(|| format!("symlinking bin/{applet} -> coreutils"))?;
-    }
-
-    Ok(())
-}
-
-fn install_bash(cfg: &Config, root: &Path) -> Result<()> {
-    let src = cfg.bash_build_dir().join("bash");
-    let dest = root.join("bin/bash");
-    fs::copy(&src, &dest).with_context(|| format!("copying {} to {}", src.display(), dest.display()))?;
-
-    let sh_link = root.join("bin/sh");
-    let _ = fs::remove_file(&sh_link);
-    symlink("bash", &sh_link).context("symlinking bin/sh -> bash")?;
-
-    Ok(())
-}
-
-/// Delegates entirely to the `UtilLinux` buildpack's own `outputs()` —
-/// which already implements the `full`-vs-minimal branch (and, for
-/// `full`, the ELF-magic-byte scan of util-linux's build directory,
-/// since its autotools build places every program flat in the top level
-/// regardless of source subdir, alongside executable shell scripts like
-/// `configure` that aren't programs to ship). Built from `cfg.util_linux`
-/// directly, not a config-file re-read — see
-/// `stages::buildpacks::util_linux_buildpack`.
-fn install_util_linux(cfg: &Config, root: &Path) -> Result<()> {
-    let bp = util_linux_buildpack(cfg)?;
-    let ctx = util_linux_ctx(cfg);
-
-    for out in bp.outputs(&ctx) {
-        let Some(install) = out.rootfs_install else { continue };
-        copy_binary(&out.path, &root.join(&install.dest))?;
-    }
-    Ok(())
-}
-
-fn install_shadow(cfg: &Config, root: &Path) -> Result<()> {
-    copy_binary(&shadow_binary_path(cfg, "login"), &root.join("bin/login"))?;
-    copy_binary(&shadow_binary_path(cfg, "passwd"), &root.join("bin/passwd"))?;
-    Ok(())
-}
-
-/// Every Phase 2+ package (seatd, dbus, eudev, wayland, and the rest of
-/// the link-time libraries) gets built AND installed into
-/// `cfg.sysroot_dir()` as part of `build-userland` itself (see
-/// `userland.rs`'s `meson_build_and_install`/`autotools_build_and_install`)
-/// — not just so the final rootfs has them, but so each package's build
-/// can find an *earlier* one (wayland-protocols needs `wayland-scanner`,
-/// libinput needs eudev's `libudev.pc`) the way a real distro's build
-/// pipeline chains packages through a sysroot rather than the host's own
-/// system paths. Assembling the rootfs is then just copying that whole
-/// tree in: `/usr/lib/x86_64-linux-gnu` is one of glibc's compiled-in
-/// default dynamic-linker search paths on this (Ubuntu) host — confirmed
-/// via `ld-linux-x86-64.so.2 --help` — so this needs no `ld.so.conf`/
+/// Every `Sysroot`-mode buildpack (seatd, dbus, eudev, wayland, and the
+/// rest of the link-time libraries) gets built AND installed into
+/// `cfg.sysroot_dir()` as part of `build-userland` itself — not just so
+/// the final rootfs has them, but so each package's build can find an
+/// *earlier* one (wayland-protocols needs `wayland-scanner`, libinput
+/// needs eudev's `libudev.pc`) the way a real distro's build pipeline
+/// chains packages through a sysroot rather than the host's own system
+/// paths. Assembling the rootfs is then just copying that whole tree in:
+/// `/usr/lib/x86_64-linux-gnu` is one of glibc's compiled-in default
+/// dynamic-linker search paths on this (Ubuntu) host — confirmed via
+/// `ld-linux-x86-64.so.2 --help` — so this needs no `ld.so.conf`/
 /// `ldconfig` step for any of it to be found at runtime.
 fn install_sysroot(cfg: &Config, root: &Path) -> Result<()> {
     let sysroot = std::env::current_dir().context("getting current directory")?.join(cfg.sysroot_dir());
@@ -162,10 +97,6 @@ fn install_dynamic_linker_and_host_libs(root: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn install_init(root: &Path) -> Result<()> {
-    copy_binary(&init_binary_path(), &root.join("sbin/init"))
 }
 
 fn copy_binary(src: &Path, dest: &Path) -> Result<()> {
