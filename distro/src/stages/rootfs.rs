@@ -4,10 +4,21 @@ use crate::stages::userland::{
     umount_binary_path, uutils_binary_path,
 };
 use anyhow::{Context, Result};
-use builder_core::stages::already_built;
+use builder_core::stages::{already_built, run_in};
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::Path;
+use std::process::Command;
+
+/// Host system libraries our first dynamically-linked binaries (dbus,
+/// seatd) need at runtime but that our own build doesn't produce —
+/// copied straight from the host, since we compile natively against the
+/// host's own glibc (see the config.rs/userland.rs comments on "we are
+/// the distro" via the host toolchain, not a cross one). Extend this list
+/// as later phases (Wayland, libinput, Mesa, ...) pull in more of them.
+const HOST_DYNAMIC_LIBS: &[&str] = &["libc.so.6", "libexpat.so.1"];
+const HOST_LIB_DIR: &str = "/lib/x86_64-linux-gnu";
+const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";
 
 /// Utilities exposed from the uutils multi-call binary. Not exhaustive,
 /// just enough for a usable minimal shell environment — same starting
@@ -42,6 +53,9 @@ pub fn assemble_rootfs(cfg: &Config, force: bool) -> Result<()> {
     install_bash(cfg, &root)?;
     install_util_linux(cfg, &root)?;
     install_shadow(cfg, &root)?;
+    install_seatd(cfg, &root)?;
+    install_dbus(cfg, &root)?;
+    install_dynamic_linker_and_host_libs(&root)?;
     install_init(&root)?;
     write_login_config(&root)?;
 
@@ -84,6 +98,49 @@ fn install_util_linux(cfg: &Config, root: &Path) -> Result<()> {
 fn install_shadow(cfg: &Config, root: &Path) -> Result<()> {
     copy_binary(&shadow_binary_path(cfg, "login"), &root.join("bin/login"))?;
     copy_binary(&shadow_binary_path(cfg, "passwd"), &root.join("bin/passwd"))?;
+    Ok(())
+}
+
+/// seatd and dbus are meson projects, unlike the autotools/uutils tools
+/// above — rather than hand-picking files to copy, `ninja install` with
+/// `DESTDIR` set to the rootfs does the same install meson would do onto
+/// a real system (binaries under `/usr/bin`, dbus's own `libdbus-1.so.3`
+/// under `/usr/lib/x86_64-linux-gnu`, dbus's `/etc/dbus-1/*.conf`, ...).
+/// `/usr/lib/x86_64-linux-gnu` is one of glibc's compiled-in default
+/// dynamic-linker search paths on this (Ubuntu) host — confirmed via
+/// `ld-linux-x86-64.so.2 --help` — so this needs no `ld.so.conf`/
+/// `ldconfig` step to be found at runtime.
+fn ninja_install(build_dir: &Path, root: &Path) -> Result<()> {
+    let destdir = std::env::current_dir().context("getting current directory")?.join(root);
+    run_in(
+        build_dir,
+        Command::new("ninja").arg("install").env("DESTDIR", destdir),
+    )
+}
+
+fn install_seatd(cfg: &Config, root: &Path) -> Result<()> {
+    ninja_install(&cfg.seatd_build_dir().join("build"), root)
+}
+
+fn install_dbus(cfg: &Config, root: &Path) -> Result<()> {
+    ninja_install(&cfg.dbus_build_dir().join("build"), root)
+}
+
+fn install_dynamic_linker_and_host_libs(root: &Path) -> Result<()> {
+    let lib64 = root.join("lib64");
+    fs::create_dir_all(&lib64).context("creating rootfs dir lib64")?;
+    copy_binary(
+        Path::new(HOST_DYNAMIC_LINKER),
+        &lib64.join("ld-linux-x86-64.so.2"),
+    )?;
+
+    let lib_dir = root.join(&HOST_LIB_DIR[1..]);
+    fs::create_dir_all(&lib_dir).with_context(|| format!("creating rootfs dir {}", lib_dir.display()))?;
+    for name in HOST_DYNAMIC_LIBS {
+        let src = Path::new(HOST_LIB_DIR).join(name);
+        copy_binary(&src, &lib_dir.join(name))?;
+    }
+
     Ok(())
 }
 
