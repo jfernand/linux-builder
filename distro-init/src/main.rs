@@ -1,10 +1,11 @@
 //! `distro`'s own PID 1: mounts the basic virtual filesystems, starts
-//! seatd and dbus (Phase 2's seat/session plumbing) and supervises
-//! `agetty` on both the VGA console and the serial console, respawning
-//! any of the three if it exits and reaping any other orphaned children.
-//! `agetty` execs `/bin/login` (shadow-utils) once a username is entered,
-//! which authenticates against `/etc/passwd`/`/etc/shadow` and execs the
-//! user's shell — this replaces Phase 1a's direct shell spawn.
+//! udevd/seatd/dbus (Phase 2's device-management and seat/session
+//! plumbing) and supervises `agetty` on both the VGA console and the
+//! serial console, respawning any of the four if it exits and reaping
+//! any other orphaned children. `agetty` execs `/bin/login`
+//! (shadow-utils) once a username is entered, which authenticates
+//! against `/etc/passwd`/`/etc/shadow` and execs the user's shell — this
+//! replaces Phase 1a's direct shell spawn.
 
 use nix::mount::{mount, MsFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -15,6 +16,8 @@ use std::time::Duration;
 const AGETTY: &str = "/sbin/agetty";
 const SEATD: &str = "/usr/bin/seatd";
 const DBUS_DAEMON: &str = "/usr/bin/dbus-daemon";
+const UDEVD: &str = "/usr/sbin/udevd";
+const UDEVADM: &str = "/usr/bin/udevadm";
 
 fn mount_basic_filesystems() {
     // Best-effort: devtmpfs is often already mounted by the kernel itself
@@ -65,12 +68,30 @@ fn spawn_dbus() -> Pid {
     spawn(DBUS_DAEMON, &[DBUS_DAEMON, "--system", "--nofork"])
 }
 
+fn spawn_udevd() -> Pid {
+    // No -d: same reasoning as dbus-daemon's --nofork above.
+    spawn(UDEVD, &[UDEVD])
+}
+
+/// devtmpfs already created device nodes before udevd started, but
+/// without notifying it — udevd only learns about *new* uevents over its
+/// netlink socket. `udevadm trigger` re-emits an "add" uevent for every
+/// device already in sysfs so udevd's database actually reflects what's
+/// there (a "coldplug"). One-shot, not supervised like the daemons above.
+fn coldplug_devices() {
+    let _ = std::process::Command::new(UDEVADM).arg("trigger").status();
+}
+
 fn main() {
     mount_basic_filesystems();
 
+    let mut udevd_pid = spawn_udevd();
     let mut seatd_pid = spawn_seatd();
     let mut dbus_pid = spawn_dbus();
-    println!("distro-init: starting {AGETTY} on tty1 and ttyS0, {SEATD}, and {DBUS_DAEMON}");
+    coldplug_devices();
+    println!(
+        "distro-init: starting {AGETTY} on tty1 and ttyS0, {SEATD}, {DBUS_DAEMON}, and {UDEVD}"
+    );
 
     let mut tty1_pid = spawn_tty1();
     let mut serial_pid = spawn_serial();
@@ -90,6 +111,9 @@ fn main() {
                 } else if pid == dbus_pid {
                     println!("distro-init: dbus-daemon exited, respawning");
                     dbus_pid = spawn_dbus();
+                } else if pid == udevd_pid {
+                    println!("distro-init: udevd exited, respawning");
+                    udevd_pid = spawn_udevd();
                 }
                 // Otherwise this was just reaping an orphaned child.
             }
