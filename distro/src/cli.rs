@@ -1,3 +1,4 @@
+use builder_core::stages::KernelChannel;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -18,20 +19,30 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Download and extract sources (kernel today; userland sources once
-    /// Phase 1 is implemented)
+    /// Download and extract every source tarball
     Fetch,
-    /// Ensure the host build toolchain is available (not yet implemented —
-    /// see Phase 1 of the roadmap)
+    /// Ensure the host build toolchain is available
     BuildToolchain,
+    /// Look up the current stable or LTS kernel release on kernel.org and
+    /// write its version/url into the config file's [kernel] section
+    ResolveKernel {
+        #[arg(long, value_enum)]
+        channel: KernelChannel,
+    },
     /// Configure and build the kernel (reuses builder-core's kernel stage
     /// unchanged)
     BuildKernel,
-    /// Build the glibc userland: uutils/coreutils, util-linux, shadow-utils
-    /// (not yet implemented — see Phase 1 of the roadmap)
+    /// Interactively customize the kernel config with `make menuconfig` and
+    /// save the result for reuse via `kernel.config_file`
+    MenuConfig {
+        /// Where to save the resulting kernel config
+        #[arg(long, default_value = "kernel.config")]
+        save_to: PathBuf,
+    },
+    /// Build the glibc userland: uutils/coreutils, bash, util-linux,
+    /// shadow-utils, and the seat/session/Wayland-core packages
     BuildUserland,
-    /// Assemble the root filesystem tree (not yet implemented — see Phase 1
-    /// of the roadmap)
+    /// Assemble the root filesystem tree
     AssembleRootfs,
     /// Partition and populate the bootable disk image (reuses
     /// builder-core's image stage unchanged)

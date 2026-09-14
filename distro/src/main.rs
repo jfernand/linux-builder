@@ -15,7 +15,11 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Fetch => stages::fetch::fetch(&cfg, cli.force),
         Command::BuildToolchain => stages::toolchain::build_toolchain(),
+        Command::ResolveKernel { channel } => stages::kernel::resolve_kernel(&cli.config, channel),
         Command::BuildKernel => builder_core::stages::kernel::build_kernel(&cfg.to_builder_core(), cli.force),
+        Command::MenuConfig { save_to } => {
+            builder_core::stages::kernel::menuconfig(&cfg.to_builder_core(), &save_to)
+        }
         Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
         Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
         Command::MakeImage => builder_core::stages::image::make_image(&cfg.to_builder_core(), cli.force),
