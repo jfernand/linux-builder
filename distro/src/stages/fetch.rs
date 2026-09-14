@@ -57,6 +57,14 @@ pub fn fetch(cfg: &Config, force: bool) -> Result<()> {
         force,
     )?;
 
+    fetch_tarball(
+        cfg,
+        &cfg.eudev.url,
+        &format!("eudev-{}.tar.gz", cfg.eudev.version),
+        &cfg.eudev_build_dir(),
+        force,
+    )?;
+
     fetch_uutils(cfg, force)?;
 
     Ok(())
