@@ -73,7 +73,10 @@ impl Buildpack for Mesa {
 
     fn build(&self, ctx: &BuildCtx, force: bool) -> anyhow::Result<()> {
         let dir = self.build_dir(ctx);
-        let marker = dir.join("build").join("meson-private").join("gbm.pc");
+        // Sysroot-installed .pc, not the build-dir-local meson-private
+        // copy — see buildpacks::weston::Weston::build's doc comment for
+        // why (a false "already built" signal on a partial failed build).
+        let marker = ctx.sysroot_dir.join("usr/lib/x86_64-linux-gnu/pkgconfig/gbm.pc");
 
         if already_built(&marker, force) {
             println!("skip build-mesa: {} already exists", marker.display());
