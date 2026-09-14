@@ -207,14 +207,38 @@ fn sysroot_env(cfg: &Config, cmd: &mut Command) -> Result<()> {
         sysroot.join("usr/lib/x86_64-linux-gnu/pkgconfig").display(),
         sysroot.join("usr/share/pkgconfig").display(),
     );
+    // `~/.local/bin` first, explicitly: Mesa needs a newer meson than
+    // apt's own package (see toolchain.rs's pip install --user), and this
+    // shouldn't depend on the invoking shell already having that directory
+    // on PATH ahead of /usr/bin — a fresh/non-interactive shell might not.
+    let local_bin = std::env::var_os("HOME")
+        .map(|h| std::path::PathBuf::from(h).join(".local/bin"))
+        .filter(|p| p.exists())
+        .map(|p| format!("{}:", p.display()))
+        .unwrap_or_default();
     let path = format!(
-        "{}:{}:{}",
+        "{local_bin}{}:{}:{}",
         sysroot.join("usr/bin").display(),
         sysroot.join("usr/sbin").display(),
         std::env::var("PATH").unwrap_or_default(),
     );
     cmd.env("PKG_CONFIG_PATH", pkg_config_path)
         .env("PKG_CONFIG_SYSROOT_DIR", &sysroot)
+        // The system pkg-config (pkgconf, /usr/bin/pkg-config), not
+        // whichever "pkg-config" a PATH search would otherwise turn up.
+        // This host also has Homebrew's own pkg-config ahead on PATH,
+        // which bakes in Homebrew's own lib/pkgconfig dirs as *compiled-in*
+        // default search paths (unlike the system one, whose defaults are
+        // the standard /usr/lib/x86_64-linux-gnu/pkgconfig and friends) —
+        // so any host package that happens to be installed via Homebrew at
+        // its own nonstandard prefix (this bit us twice already: Mesa's
+        // optional spirv-tools support, libxkbcommon's optional
+        // xkbregistry needing libxml2) gets "found", and then
+        // PKG_CONFIG_SYSROOT_DIR mangles its `-I` path into a sysroot
+        // location it was never installed under, breaking the compile.
+        // Forcing the system pkg-config avoids the whole class of bug —
+        // its defaults never point outside a normal Ubuntu install.
+        .env("PKG_CONFIG", "/usr/bin/pkg-config")
         .env("PATH", path);
     Ok(())
 }
@@ -233,6 +257,19 @@ fn sysroot_env(cfg: &Config, cmd: &mut Command) -> Result<()> {
 /// direct sysroot prefix here). See `build_wayland` for the one exception.
 fn meson_build_and_install(cfg: &Config, dir: &std::path::Path, extra_args: &[&str]) -> Result<()> {
     let destdir = sysroot_abs(cfg)?;
+
+    // A `--force` rebuild starts every meson project fresh: `meson setup`
+    // refuses to run again on an already-configured `build/` (worse, if the
+    // directory was last configured by an older meson than is now on PATH —
+    // exactly what happened switching to a pip-installed meson for Mesa —
+    // it fails outright with "Build data file ... references functions or
+    // classes that don't exist" instead of just reconfiguring).
+    let build_dir = dir.join("build");
+    if build_dir.exists() {
+        std::fs::remove_dir_all(&build_dir)
+            .with_context(|| format!("removing stale build dir {}", build_dir.display()))?;
+    }
+
     let mut setup = Command::new("meson");
     setup.arg("setup").arg("build").arg("--prefix=/usr").args(extra_args);
     sysroot_env(cfg, &mut setup)?;
