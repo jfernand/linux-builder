@@ -9,11 +9,12 @@ use std::process::Command;
 /// the Wayland stack). `libexpat1-dev` is dbus's one build-time library
 /// dependency (XML parsing) — the built dbus-daemon links it dynamically
 /// and we copy the host's libexpat.so into the rootfs at assemble-rootfs
-/// time, same as every other dynamic dependency from here on. Unlike
-/// distroless's musl cross-toolchain, this is all native — the host's own
-/// gcc/glibc.
+/// time, same as every other dynamic dependency from here on. `gperf`
+/// (a perfect-hash-function generator) is eudev's one extra build-time
+/// tool. Unlike distroless's musl cross-toolchain, this is all native —
+/// the host's own gcc/glibc.
 pub fn build_toolchain() -> Result<()> {
-    if have("gcc") && have("make") && have("meson") && have("ninja") && have("pkg-config") {
+    if have("gcc") && have("make") && have("meson") && have("ninja") && have("pkg-config") && have("gperf") {
         println!("build tools already installed");
         return Ok(());
     }
@@ -29,6 +30,7 @@ pub fn build_toolchain() -> Result<()> {
         "ninja-build",
         "pkg-config",
         "libexpat1-dev",
+        "gperf",
     ]))?;
     Ok(())
 }
