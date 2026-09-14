@@ -4,6 +4,7 @@ networking = false
 [kernel]
 version = "6.17"
 url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.17.tar.xz"
+features = ["graphics"]
 
 [uutils]
 git_url = "https://github.com/uutils/coreutils.git"
@@ -60,6 +61,14 @@ url = "https://gitlab.freedesktop.org/libevdev/libevdev/-/archive/libevdev-1.13.
 [libinput]
 version = "1.31.3"
 url = "https://gitlab.freedesktop.org/libinput/libinput/-/archive/1.31.3/libinput-1.31.3.tar.gz"
+
+[libdrm]
+version = "2.4.134"
+url = "https://gitlab.freedesktop.org/mesa/drm/-/archive/libdrm-2.4.134/drm-libdrm-2.4.134.tar.gz"
+
+[mesa]
+version = "26.2.2"
+url = "https://gitlab.freedesktop.org/mesa/mesa/-/archive/mesa-26.2.2/mesa-mesa-26.2.2.tar.gz"
 
 [image]
 arch = "x86_64"
