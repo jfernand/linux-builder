@@ -424,6 +424,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "builder-core",
+ "buildpack-core",
+ "buildpacks",
  "clap",
  "serde",
  "toml",

@@ -20,22 +20,26 @@ fn main() -> Result<()> {
         Command::MenuConfig { save_to } => {
             builder_core::stages::kernel::menuconfig(&cfg.to_builder_core(), &save_to)
         }
-        Command::BuildUserland => stages::userland::build_userland(&cfg, cli.force),
+        Command::BuildUserland => {
+            stages::userland::build_userland(&cfg, cli.force)?;
+            stages::new_packages::build_new_packages(&cli.config, &cfg, cli.force)
+        }
         Command::AssembleRootfs => stages::rootfs::assemble_rootfs(&cfg, cli.force),
         Command::MakeImage => builder_core::stages::image::make_image(&cfg.to_builder_core(), cli.force),
         Command::TestQemu { window } => builder_core::stages::qemu::test_qemu(&cfg.to_builder_core(), window),
         Command::ListDevices => list_devices(),
         Command::ListFeatures => list_features(),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
-        Command::All => run_all(&cfg, cli.force),
+        Command::All => run_all(&cli.config, &cfg, cli.force),
     }
 }
 
-fn run_all(cfg: &Config, force: bool) -> Result<()> {
+fn run_all(config_path: &std::path::Path, cfg: &Config, force: bool) -> Result<()> {
     stages::fetch::fetch(cfg, force)?;
     stages::toolchain::build_toolchain()?;
     builder_core::stages::kernel::build_kernel(&cfg.to_builder_core(), force)?;
     stages::userland::build_userland(cfg, force)?;
+    stages::new_packages::build_new_packages(config_path, cfg, force)?;
     stages::rootfs::assemble_rootfs(cfg, force)?;
     builder_core::stages::image::make_image(&cfg.to_builder_core(), force)?;
     println!("done. run `distro test-qemu` to boot the image in QEMU.");
