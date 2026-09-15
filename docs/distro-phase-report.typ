@@ -1,5 +1,53 @@
 #import "isss-template.typ": *
 
+// A vertical stack of layer boxes, bottom-most item first in the call —
+// rendered top-down (last item on top), connected by down-arrows, the
+// top layer picked out in amber. Each item is (label, note) or
+// (label, none).
+#let layerstack(..items) = {
+  let list = items.pos().rev()
+  let parts = ()
+  for (i, it) in list.enumerate() {
+    let (lbl, note) = it
+    parts.push(block(
+      width: 82%, fill: if i == 0 { brand-primary } else { c-white },
+      stroke: 1pt + fg-primary, inset: (x: 10pt, y: 7pt), radius: 1pt,
+    )[
+      #text(weight: 700, size: 8.4pt, fill: fg-primary)[#lbl]
+      #if note != none [ #text(size: 7.2pt, fill: fg-secondary)[— #note]]
+    ])
+    if i < list.len() - 1 {
+      parts.push(align(center)[#text(size: 11pt, fill: fg-muted)[↓]])
+    }
+  }
+  block(width: 100%, above: 16pt, below: 16pt)[
+    #align(center)[
+      #stack(dir: ttb, spacing: 3pt, ..parts)
+    ]
+  ]
+}
+
+// A left-to-right chain of short boxes joined by arrows — a build/data
+// flow, read in call order.
+#let flow(..steps) = {
+  let items = steps.pos()
+  let parts = ()
+  for (i, it) in items.enumerate() {
+    parts.push(block(
+      fill: c-white, stroke: 1pt + fg-primary,
+      inset: (x: 7pt, y: 5pt), radius: 1pt,
+    )[#text(size: 7.4pt, weight: 600, fill: fg-primary)[#it]])
+    if i < items.len() - 1 {
+      parts.push(align(horizon)[#text(size: 10pt, fill: fg-muted)[→]])
+    }
+  }
+  block(width: 100%, above: 14pt, below: 14pt)[
+    #align(center)[
+      #stack(dir: ltr, spacing: 6pt, ..parts)
+    ]
+  ]
+}
+
 #show: isss-doc.with(
   title: "Two Linux Systems From Scratch",
   subtitle: "What a Linux System Is, How It Boots, and How distro/distroless Each Build One",
@@ -42,6 +90,12 @@
 
 Every Linux system, regardless of distribution, is the same three layers
 stacked on top of each other:
+
+#layerstack(
+  ("Bootloader", "GRUB or similar — finds and loads the kernel"),
+  ("Kernel", "vmlinuz — hardware, memory, mounts root"),
+  ("Userspace", "init (PID 1) and everything it starts"),
+)
 
 #dtable(
   columns: (auto, 1fr),
@@ -194,6 +248,8 @@ detected, but "knowing about it" and "userspace can actually use it" are
 two different things. Getting from one to the other is a genuine
 pipeline, not a single step.
 
+#flow("Device appears", "kernel emits uevent", "udevd runs rules", "/dev node fixed up", "database updated")
+
 == sysfs: the kernel's hardware model, as a filesystem
 
 Every device, bus, and driver the kernel currently knows about is
@@ -296,6 +352,8 @@ unprivileged process `open()` those nodes directly hits real permission
 walls even if it wanted to. *Seat management* is the piece that solves
 this — and it turns out to bundle together several related problems, not
 just one.
+
+#flow("Compositor", "libseat", "seatd", "/dev/input, /dev/dri")
 
 == What a "seat" and a "session" actually are
 
@@ -452,6 +510,14 @@ here does the passwd/shadow check directly.
 Getting from "a kernel that can talk to a GPU" to "a compositor rendering
 a client's window on an actual display" passes through several distinct
 layers, each solving a different part of the problem:
+
+#layerstack(
+  ("DRM/KMS (kernel)", "owns the GPU, buffers, mode-setting"),
+  ("libdrm", "ioctl wrapper every layer above builds on"),
+  ("Mesa / Gallium", "GL calls → this GPU's own commands"),
+  ("EGL / GBM", "context + buffer allocation"),
+  ("Compositor", "renders and scans a frame out"),
+)
 
 #dtable(
   columns: (auto, 1fr),
@@ -774,13 +840,61 @@ suppress that, so they stay `distro-init`'s direct children and its
 == The kernel
 
 `distro.toml` names a kernel version and a download URL under `[kernel]`;
-`distro build-kernel` fetches, configures, and compiles it. The starting
-config is either `make defconfig` (the default) with every optional
-*feature pack* below stripped back off, or a previously saved
+`distro build-kernel` fetches, configures, and compiles it.
+
+=== Kconfig and `.config`: how kernel configuration actually works
+
+Every buildable kernel feature — a driver, a subsystem, an optional
+instrumentation hook — is declared in *Kconfig*, a dependency-aware
+description language: an option can be built (`y`, directly into the
+kernel image), built as a separate loadable module (`m`), or left out
+entirely (`n`), and Kconfig itself enforces that an option can't be
+turned on if whatever it depends on is off. `.config` is the flat,
+resolved output of that — one `CONFIG_FOO=y`/`m`/`n` line per option —
+and it's `.config`, not the Kconfig source tree, that `make` actually
+reads to decide what to compile.
+
+`make defconfig` produces a *curated* starting `.config` — each
+architecture ships its own reasonable, working baseline, not "every
+option off" — which is why stripping this project's own optional
+feature packs back out (below) starts from a real, bootable
+configuration rather than building one up from nothing. `make
+olddefconfig` is the companion operation for the opposite situation:
+given an existing `.config` (possibly written by a different Kconfig
+tree version entirely — a newer kernel adds options an older `.config`
+never had opinions about), it fills in every option the current tree
+knows about but the file doesn't mention with that option's own
+default, non-interactively. This project uses it in both of §10.2's
+starting points: after `defconfig`'s own baseline gets edited by pack
+stripping, and to re-resolve a previously saved, hand-picked config that
+may predate a kernel version upgrade.
+
+=== Built-in vs. module: why nothing here needs loading
+
+An option built as `y` is simply part of `vmlinuz` — present the moment
+the kernel starts, nothing further to do. An option built as `m` instead
+produces a separate `.ko` file, meant to be found under
+`/lib/modules/<version>/` and explicitly loaded (by an early-boot module
+loader, or a later `modprobe`) before whatever it provides becomes
+available — a real mechanism, and the right choice for a general-purpose
+distribution that can't predict every piece of hardware it'll run on
+ahead of time. This distro's own kernel takes the other path: every
+feature it builds is `y`, never `m` — no `/lib/modules` install step
+exists in its own pipeline (§10.5) at all — which is exactly what makes
+skipping an initramfs (§2.3) safe: there's no module-loading step this
+kernel could ever be waiting on before it can mount its own root
+filesystem.
+
+=== Feature packs, and getting from a stripped baseline to the final config
+
+The starting config is either `make defconfig` (the default) with every
+optional *feature pack* below stripped back off, or a previously saved
 `.config` from an interactive `make menuconfig` session
 (`distro menu-config`), re-resolved via `make olddefconfig`. Either way,
 whatever packs are named in `kernel.features` get turned back on as the
 final step.
+
+#flow("defconfig or saved .config", "strip feature packs", "re-enable kernel.features", "olddefconfig", "final .config")
 
 #dtable(
   columns: (auto, 1fr),
@@ -906,6 +1020,8 @@ at its own build time, and `libinput` needs `eudev`'s installed
 one from-source package's build see another already-built one, using
 the exact same mechanism real software expects a real system install to
 provide — is what the *sysroot* actually is.
+
+#flow("Package A: --prefix=/usr", "make install DESTDIR=sysroot", ".pc file in sysroot", "Package B's pkg-config lookup", "Package B build")
 
 === DESTDIR: staged installation, not a different install
 
