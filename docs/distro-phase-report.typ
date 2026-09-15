@@ -290,32 +290,138 @@ Whichever is chosen, the shell and login program are separate concerns —
 coreutils gets you `ls` and `cp`, not a shell to type them into or a
 login prompt to authenticate at.
 
-= Graphics, Conceptually: DRM, Mesa, Gallium, DRI, EGL, GBM
+= Graphics, Conceptually: From a Kernel Driver to a Frame on Screen
 
 Getting from "a kernel that can talk to a GPU" to "a compositor rendering
-a client's window" passes through several distinct layers, each solving
-a different part of the problem:
+a client's window on an actual display" passes through several distinct
+layers, each solving a different part of the problem:
 
 #dtable(
   columns: (auto, 1fr),
   ([Layer], [What it actually is]),
-  ([DRM (kernel)], [The kernel subsystem that owns the GPU at the lowest level: hands out framebuffers, submits command buffers. Has no idea what "draw a triangle" means — purely a resource-management and submission interface.]),
+  ([DRM (kernel)], [The kernel subsystem that owns the GPU at the lowest level: hands out and tracks buffers, submits command buffers, configures what's actually scanned out to a display. Has no idea what "draw a triangle" means — purely a resource-management, submission, and mode-setting interface.]),
   ([Mesa], [The userspace library that turns OpenGL/OpenGL ES calls into whatever a specific GPU actually understands.]),
   ([Gallium], [Mesa's own internal plumbing for doing that translation once per GPU *family* rather than once per API. A "Gallium driver" is the translator for one specific GPU — or, for a virtual machine, one specific *virtual* GPU.]),
   ([DRI], [Direct Rendering Infrastructure — the convention by which an application actually finds and loads the right driver at runtime.]),
   ([EGL], [The glue between a window system (Wayland, X11, …) and an OpenGL/GLES context. What a compositor or client actually links against directly — not Mesa's internals.]),
-  ([GBM], [Generic Buffer Management — how a Wayland compositor allocates the actual pixel buffers it hands to the DRM/KMS display hardware. The piece that makes a rendered frame show up on screen rather than just existing in GPU memory.]),
+  ([GBM], [Generic Buffer Management — how a Wayland compositor allocates the actual pixel buffers it hands to the DRM/KMS display hardware.]),
 )
+
+== DRM and KMS: what the kernel actually owns
+
+*DRM* (Direct Rendering Manager) is really two jobs in one subsystem.
+The first, *GEM* (Graphics Execution Manager), is buffer-object
+management: every chunk of GPU-accessible memory — a texture, a
+framebuffer, a command buffer — is a GEM object, referenced by a handle
+the kernel hands back to whichever process allocated it, and GEM is what
+tracks who owns what and submits queued command buffers to the GPU in
+order. The second, *KMS* (Kernel Mode Setting), is display
+configuration: enumerating the physical *connectors* (an HDMI port,
+say), the *CRTCs* (the hardware pipeline that scans a buffer out to a
+connector at a given resolution/refresh rate), and the *planes* a CRTC
+can composite together — and letting userspace configure all of it
+through one atomic ioctl that either applies a whole new configuration
+or fails without touching anything, rather than a sequence of individual
+calls that could leave the display in a half-configured state partway
+through.
+
+DRM exposes two different kinds of device node for this, deliberately
+separated by privilege: `/dev/dri/card0` (the *primary* node) is what
+mode-setting and display configuration happens through — only ever
+opened by whichever single process currently owns the display, the
+compositor. `/dev/dri/renderD128` (a *render* node) is for GPU work that
+has nothing to do with display configuration — submitting rendering or
+compute work, with no ability to touch what's actually on screen. A
+sandboxed or unprivileged client can safely be handed a render node; it
+can never be safely handed the primary node too.
+
+== Buffer objects, and sharing them without copying
+
+Not every buffer needs GPU acceleration to produce — a plain, linear,
+CPU-writable framebuffer (a *dumb buffer*, in DRM's own terminology,
+created via `DRM_IOCTL_MODE_CREATE_DUMB`) is what a kernel framebuffer
+console uses, since it just needs somewhere to memcpy text glyphs into,
+not a GPU pipeline. Actual rendering — anything Mesa/Gallium produces —
+allocates real, driver-specific GEM buffer objects instead, through
+`libgbm` (below), sized and laid out however that particular GPU driver
+needs them internally.
+
+Getting a buffer from "something Mesa just rendered into" to "something
+DRM/KMS scans out to a display" without a wasteful copy is `dma-buf`'s
+job: a kernel framework for exporting any GEM buffer as a plain file
+descriptor that a *different* subsystem (or process) can import and use
+directly — the same underlying memory, not a copy. This is the handoff
+that makes zero-copy presentation possible at all: a compositor renders
+into a buffer via EGL/Gallium, exports it as a `dma-buf` fd, and hands
+that exact fd to KMS to display, with the GPU's own rendered pixels
+never round-tripping through the CPU.
+
+== Mesa, Gallium, and finding the right driver at runtime
+
+Mesa doesn't hard-code one driver into `libGL`/`libEGL` — which Gallium
+driver actually handles a given GPU is resolved at *runtime*, via *DRI*:
+the loader inspects which DRM device is being used (its PCI vendor/device
+ID, for real hardware, or its virtual device identity for `virtio-gpu`)
+and `dlopen()`s the matching driver shared object out of Mesa's own DRI
+driver directory. This is what lets one Mesa install support several
+different GPU families simultaneously without an application needing to
+know or care which one it's actually running against — including a
+Gallium driver for a device that only exists inside a virtual machine.
+
+== EGL and GBM: from an API call to an allocated buffer
+
+*EGL* is what a client or compositor actually calls to get a usable
+OpenGL/GLES rendering context tied to a specific window-system surface —
+`eglCreateWindowSurface` and friends. It needs a concrete *platform*
+implementation to know what a "surface" even means for a given window
+system: `platform_wayland` for an ordinary Wayland client, and, for the
+compositor itself (which has no window system underneath it — it *is*
+the window system), `platform_gbm`. *GBM* is what backs that
+platform: `gbm_device` wraps a DRM file descriptor, `gbm_surface`/
+`gbm_bo` allocate actual buffers sized and tiled correctly for that
+GPU's KMS scanout path, and `gbm_bo_get_fd()` is the call that exports
+one of those buffers as the `dma-buf` fd KMS ultimately consumes.
+
+== Getting a rendered frame onto the actual display
+
+The compositor's own per-frame loop, once everything above is in place,
+is genuinely simple: render the next frame into a GBM buffer via EGL,
+then hand that buffer to KMS as the next scanout buffer for a CRTC/plane
+via an atomic commit (conceptually a `drmModePageFlip`, though the
+modern atomic API folds this into the same all-or-nothing ioctl KMS
+configuration itself uses) — timed to the display's own vertical blank,
+not applied instantly mid-scan. Completion isn't polled for: the
+compositor reads its own DRM file descriptor as part of its normal event
+loop, and a page-flip-complete event arrives on it once the hardware has
+actually switched to scanning out the new buffer, which is also the
+compositor's cue that the *previous* buffer is now safe to reuse or
+free.
+
+== virtio-gpu and virgl: this same stack, virtualized
+
+Everything above assumes a real GPU underneath, but QEMU doesn't
+present one when running as a plain virtual machine — `virtio-gpu` is a
+*paravirtualized* GPU device instead: the guest kernel's `virtio_gpu`
+DRM driver looks, from Mesa's side, like an ordinary DRM device (it
+still exposes GEM, KMS, render/primary nodes), but the actual rendering
+commands a guest's `virgl` Gallium driver produces are serialized and
+sent over the virtio transport to QEMU's own `virglrenderer`, which
+replays them against the *host's* real OpenGL driver and GPU. The guest
+never touches host GPU memory directly; it gets real GPU-accelerated
+rendering by proxy. `softpipe`, by contrast, is a genuine software
+rasterizer with no host GPU involved at all — pure CPU — and is what
+this workspace's graphics stack (§10) actually falls back to inside
+QEMU, `virgl`'s host-side `virglrenderer` support not being assumed
+present on every build/test host.
 
 A minimal Wayland-only graphics stack built from source needs, at
 minimum: the kernel's DRM driver for the target GPU, `libdrm` (the
-kernel-userspace ioctl wrapper every one of these libraries builds on),
-and Mesa itself providing `libEGL`/`libGLESv2`/`libgbm` plus at least one
+kernel-userspace ioctl wrapper every one of these layers builds on), and
+Mesa itself providing `libEGL`/`libGLESv2`/`libgbm` plus at least one
 Gallium driver. `llvmpipe` (an LLVM-based software rasterizer) is one
-possible fallback driver, not a hard requirement — `virgl` (talks to a
-virtual machine's virtio-gpu/virgl backend) and `softpipe` (a
-non-LLVM software fallback) are two others that work without pulling
-LLVM into the build at all.
+possible fallback driver, not a hard requirement — `virgl` and
+`softpipe` are two others that work without pulling LLVM into the build
+at all.
 
 = Static vs Dynamic Linking
 
