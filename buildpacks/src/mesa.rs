@@ -7,7 +7,7 @@
 //! function's doc comment.
 
 use anyhow::Context;
-use buildpack_core::build::meson_build_and_install;
+use buildpack_core::build::meson_build_and_install_env;
 use buildpack_core::run::already_built;
 use buildpack_core::{BuildCtx, BuildOutput, Buildpack, Description, InstallMode, Source};
 use serde::{Deserialize, Serialize};
@@ -59,9 +59,11 @@ impl Buildpack for Mesa {
         Description {
             id: "mesa",
             name: "Mesa",
-            summary: "OpenGL/EGL/GBM drivers, scoped to virgl/softpipe (no LLVM/Vulkan/X11)",
+            summary: "OpenGL/EGL/GBM drivers (virgl/softpipe) plus lavapipe, Mesa's software Vulkan driver",
             long_description: "Built with meson, platforms=wayland, gallium-drivers=virgl,\
-                softpipe — Phase 3's graphics stack scoped to QEMU's virtio-gpu first.",
+                softpipe, vulkan-drivers=swrast (lavapipe — no host GPU/Vulkan ICD dependency,\
+                same portability reasoning as softpipe). LLVM statically linked in\
+                (shared-llvm=disabled), so the target rootfs carries no separate libLLVM.",
         }
     }
 
@@ -88,14 +90,32 @@ impl Buildpack for Mesa {
         }
 
         println!("configuring/building/installing mesa in {}", dir.display());
-        meson_build_and_install(
+        // Mesa's LLVM detection walks PATH for `llvm-config` — this host's
+        // Homebrew install shadows the correct /usr/bin one (18.1.3) with
+        // an incompatible major version (22.1.8) ahead of it in PATH, the
+        // same leak class sysroot_env's own PKG_CONFIG override already
+        // guards against for pkg-config. Prepending /usr/bin here (ahead
+        // of the rest of the host PATH, but after ~/.local/bin, which
+        // still needs to win for meson itself — see the toolchain note
+        // above) forces the right one without disturbing anything else.
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let local_bin = home
+            .as_ref()
+            .map(|h| h.join(".local/bin"))
+            .filter(|p| p.exists())
+            .map(|p| format!("{}:", p.display()))
+            .unwrap_or_default();
+        let path = format!("{local_bin}/usr/bin:/usr/sbin:{}", std::env::var("PATH").unwrap_or_default());
+
+        meson_build_and_install_env(
             ctx,
             &dir,
             &[
                 "-Dplatforms=wayland",
                 "-Dgallium-drivers=virgl,softpipe",
-                "-Dvulkan-drivers=",
-                "-Dllvm=disabled",
+                "-Dvulkan-drivers=swrast",
+                "-Dllvm=enabled",
+                "-Dshared-llvm=disabled",
                 "-Dglx=disabled",
                 "-Dgbm=enabled",
                 "-Degl=enabled",
@@ -105,6 +125,7 @@ impl Buildpack for Mesa {
                 "-Dspirv-tools=disabled",
                 "-Dlmsensors=disabled",
             ],
+            &[("PATH", &path)],
         )
     }
 

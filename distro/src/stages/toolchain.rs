@@ -17,10 +17,32 @@ const MIN_MESON_VERSION: (u32, u32) = (1, 4);
 /// and we copy the host's libexpat.so into the rootfs at assemble-rootfs
 /// time, same as every other dynamic dependency from here on. `gperf`
 /// (a perfect-hash-function generator) is eudev's one extra build-time
-/// tool. Unlike distroless's musl cross-toolchain, this is all native —
-/// the host's own gcc/glibc.
+/// tool. `glslang-tools` provides `glslangValidator`, Mesa's build-time
+/// GLSL→SPIR-V compiler for its `swrast` (lavapipe) Vulkan driver.
+/// `libpolly-18-dev` is a separate apt package from `llvm-18-dev` itself
+/// — Ubuntu's `llvm-config` reports Polly/PollyISL as available link
+/// components regardless, so linking against static LLVM (Mesa's
+/// `shared-llvm=disabled`, avoiding a libLLVM runtime dependency on
+/// target) fails at link time without it, even though nothing here uses
+/// Polly's actual functionality. All build tools, none of them end up on
+/// target, so they belong here alongside meson/ninja, not as from-source
+/// buildpacks. Unlike distroless's musl cross-toolchain, this is all
+/// native — the host's own gcc/glibc.
 pub fn build_toolchain() -> Result<()> {
-    if !(have("gcc") && have("make") && have("meson") && have("ninja") && have("pkg-config") && have("gperf")) {
+    if !(have("gcc")
+        && have("make")
+        && have("meson")
+        && have("ninja")
+        && have("pkg-config")
+        && have("gperf")
+        && have("glslangValidator")
+        && Command::new("sh")
+            .arg("-c")
+            .arg("dpkg -s libpolly-18-dev >/dev/null 2>&1")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false))
+    {
         println!("installing build tools via apt (requires sudo)");
         run(Command::new("sudo").args(["apt-get", "update"]))?;
         run(Command::new("sudo").args([
@@ -34,6 +56,8 @@ pub fn build_toolchain() -> Result<()> {
             "libexpat1-dev",
             "gperf",
             "python3-pip",
+            "glslang-tools",
+            "libpolly-18-dev",
         ]))?;
     }
 

@@ -65,6 +65,22 @@ pub fn sysroot_env(ctx: &BuildCtx, cmd: &mut Command) -> Result<()> {
 }
 
 pub fn meson_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&str]) -> Result<()> {
+    meson_build_and_install_env(ctx, dir, extra_args, &[])
+}
+
+/// Same as `meson_build_and_install`, plus extra environment variables
+/// applied on top of `sysroot_env` (so a per-package override can win) —
+/// for the rare package that needs one more defensive fix in the same
+/// spirit as `sysroot_env`'s own `PKG_CONFIG=/usr/bin/pkg-config`: Mesa's
+/// LLVM detection walks `PATH` for `llvm-config`, which this host's own
+/// Homebrew install shadows with an incompatible major version ahead of
+/// the correct `/usr/bin` one.
+pub fn meson_build_and_install_env(
+    ctx: &BuildCtx,
+    dir: &Path,
+    extra_args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<()> {
     let destdir = sysroot_abs(ctx)?;
 
     let build_dir = dir.join("build");
@@ -76,16 +92,25 @@ pub fn meson_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&str]) 
     let mut setup = Command::new("meson");
     setup.arg("setup").arg("build").arg("--prefix=/usr").args(extra_args);
     sysroot_env(ctx, &mut setup)?;
+    for (k, v) in env {
+        setup.env(k, v);
+    }
     run_in(dir, &mut setup)?;
 
     let mut build = Command::new("ninja");
     build.arg("-C").arg("build");
     sysroot_env(ctx, &mut build)?;
+    for (k, v) in env {
+        build.env(k, v);
+    }
     run_in(dir, &mut build)?;
 
     let mut install = Command::new("ninja");
     install.arg("-C").arg("build").arg("install");
     sysroot_env(ctx, &mut install)?;
+    for (k, v) in env {
+        install.env(k, v);
+    }
     install.env("DESTDIR", destdir);
     run_in(dir, &mut install)?;
 
