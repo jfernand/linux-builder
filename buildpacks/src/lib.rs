@@ -21,6 +21,8 @@ pub mod seatd;
 pub mod shadow;
 pub mod util_linux;
 pub mod uutils;
+pub mod vulkan_headers;
+pub mod vulkan_loader;
 pub mod wayland;
 pub mod wayland_protocols;
 pub mod weston;

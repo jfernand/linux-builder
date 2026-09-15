@@ -1033,7 +1033,7 @@ works without the right one already compiled in via `kernel.features`
   align: (left, left, left),
   ([Package], [Version], [What it's for]),
   ([libdrm], [2.4.134], [The kernel-userspace ioctl wrapper every GPU-facing library builds on — every vendor-specific sub-library disabled, virtio-gpu needs only the generic core.]),
-  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback). Vulkan and GLX/X11 both disabled — Wayland/EGL/GLES only, no LLVM needed for either driver.]),
+  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback), plus `lavapipe` (the software Vulkan ICD, §10.3.6.1), statically linked against LLVM so the target image carries no runtime `libLLVM.so` dependency. GLX/X11 stays disabled — Wayland/EGL/GLES/Vulkan only.]),
 )
 
 The kernel driver itself — `virtio_gpu`, part of the `graphics` feature
@@ -1114,17 +1114,64 @@ patch (and the project's own committed `Cargo.lock`) already resolved to.
   itself had before its own real-boot milestone above was reached.
 ]
 
-#callout(kind: "trap", "Vulkan is a known, deliberate gap here")[
-  `smithay`'s `backend_vulkan` feature compiles in cleanly — the `ash`
-  crate needs no Vulkan SDK at build time — but this workspace's own
-  Mesa build has Vulkan drivers disabled entirely
-  (`-Dvulkan-drivers=`, empty, §10.3.4). `cosmic-comp` should fall back
-  to `renderer_glow` (GL via EGL, which this Mesa build does provide) at
-  runtime the same way Weston falls back to `softpipe` — not yet
-  confirmed with a real boot. Re-enabling a Vulkan driver in Mesa (most
-  likely `lavapipe`, the software Vulkan implementation, or `virtio`'s
-  own Vulkan passthrough) is tracked as real future work, not assumed
-  unnecessary.
+==== A working Vulkan stack: driver, headers, and loader
+
+Getting Vulkan from "compiles" to "usable at runtime" needed three
+separate pieces, not one:
+
+#layerstack(
+  ("cosmic-comp (dlopen's libvulkan.so.1 at runtime)", "no build-time link — smithay's ash crate needs no Vulkan SDK"),
+  ("Vulkan Loader (libvulkan.so.1)", "KhronosGroup/Vulkan-Loader, CMake — reads /usr/share/vulkan/icd.d/*.json"),
+  ("lavapipe ICD (libvulkan_lvp.so)", "Mesa, built statically against LLVM"),
+  ("Vulkan Headers", "KhronosGroup/Vulkan-Headers — headers + pkg-config/CMake package files only, no library"),
+)
+
+Mesa's own Vulkan driver (`lavapipe`, enabled via
+`-Dvulkan-drivers=swrast`, §10.3.4's table) is an *ICD* (Installable
+Client Driver) — the actual implementation an application talks to once
+it's found. It is not, by itself, enough: applications don't link
+against an ICD directly, they `dlopen()` the Vulkan *loader*
+(`libvulkan.so.1`, a separate KhronosGroup project from Mesa), which
+then reads `/usr/share/vulkan/icd.d/*.json` manifests at runtime to find
+and dispatch to whichever ICD is installed. Without the loader, Mesa's
+ICD sits on disk unreachable — nothing in this workspace had ever built
+one before this pass.
+
+Two new buildpacks close that gap: `vulkan_headers` (headers-only,
+`InstallMode::Sysroot`, needed at build time by both Mesa and the loader
+itself) and `vulkan_loader` (depends on `vulkan_headers`; built with
+`-DBUILD_WSI_WAYLAND_SUPPORT=ON` and XCB/Xlib support both off, matching
+this workspace's Wayland-only policy elsewhere). Both are CMake-based —
+the first CMake support this project needed, everything before them
+having been autotools or meson.
+
+#callout(kind: "ok", "Verified")[
+  `readelf -d` on the built `libvulkan.so.1` shows exactly one `NEEDED`
+  entry, `libc.so.6` — the loader itself has no other link-time
+  dependencies, by design, since it finds ICDs by `dlopen()` at runtime
+  rather than linking them. `/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`
+  (installed by the Mesa buildpack) correctly names
+  `/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so` as its ICD's
+  `library_path`. `distro build-userland`'s topological sort places both
+  new packages correctly (`vulkan_headers` before `vulkan_loader`, both
+  before `mesa`), `assemble-rootfs` installs `libvulkan.so.1` and the ICD
+  manifest into the rootfs, and a full `make-image` plus QEMU boot
+  (§10.3.5's callout) still reaches a clean login prompt with both in
+  place.
+]
+
+#callout(kind: "trap", "Still not confirmed: an application actually using it")[
+  The loader finding the ICD manifest is not the same as `cosmic-comp`
+  successfully creating a `VkInstance` and rendering a frame through it
+  — that needs `cosmic-comp` actually running, which still has no launch
+  mechanism (§10.3.6's callout above). Deliberately, `vulkan_loader` was
+  *not* added to `cosmic_comp`'s own `dependencies()` list: this
+  project's `dependencies()` edges are build-order only, and `cosmic-comp`
+  never links against the loader at build time, only `dlopen()`s it at
+  runtime — so nothing in the dependency graph would catch a broken
+  runtime lookup. Confirming Vulkan actually works end-to-end is future
+  work, gated on the same missing launch mechanism as the rest of
+  `cosmic-comp`.
 ]
 
 == The sysroot: how these packages find each other

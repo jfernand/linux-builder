@@ -48,6 +48,8 @@ use buildpacks::seatd::Seatd;
 use buildpacks::shadow::Shadow;
 use buildpacks::util_linux::UtilLinux;
 use buildpacks::uutils::Uutils;
+use buildpacks::vulkan_headers::VulkanHeaders;
+use buildpacks::vulkan_loader::VulkanLoader;
 use buildpacks::wayland::Wayland;
 use buildpacks::wayland_protocols::WaylandProtocols;
 use buildpacks::weston::Weston;
@@ -171,6 +173,8 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<Cairo>(cfg, "cairo")?),
         Box::new(configured::<XkeyboardConfig>(cfg, "xkeyboard_config")?),
         Box::new(configured::<Weston>(cfg, "weston")?),
+        Box::new(configured::<VulkanHeaders>(cfg, "vulkan_headers")?),
+        Box::new(configured::<VulkanLoader>(cfg, "vulkan_loader")?),
         Box::new(configured::<CosmicComp>(cfg, "cosmic_comp")?),
         Box::new(DistroInit::new()),
     ])

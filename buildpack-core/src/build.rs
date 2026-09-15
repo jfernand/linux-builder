@@ -117,6 +117,45 @@ pub fn meson_build_and_install_env(
     Ok(())
 }
 
+/// CMake's own configure/build/install-DESTDIR triad, mirroring
+/// `meson_build_and_install`'s shape — the Vulkan ecosystem (headers,
+/// loader) is the first thing in this workspace to use CMake rather than
+/// meson/autotools.
+pub fn cmake_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&str]) -> Result<()> {
+    let destdir = sysroot_abs(ctx)?;
+
+    let build_dir = dir.join("build");
+    if build_dir.exists() {
+        std::fs::remove_dir_all(&build_dir)
+            .with_context(|| format!("removing stale build dir {}", build_dir.display()))?;
+    }
+
+    let mut configure = Command::new("cmake");
+    configure
+        .arg("-S")
+        .arg(".")
+        .arg("-B")
+        .arg("build")
+        .arg("-DCMAKE_INSTALL_PREFIX=/usr")
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .args(extra_args);
+    sysroot_env(ctx, &mut configure)?;
+    run_in(dir, &mut configure)?;
+
+    let mut build = Command::new("cmake");
+    build.arg("--build").arg("build").arg("--parallel").arg(num_cpus().to_string());
+    sysroot_env(ctx, &mut build)?;
+    run_in(dir, &mut build)?;
+
+    let mut install = Command::new("cmake");
+    install.arg("--install").arg("build");
+    sysroot_env(ctx, &mut install)?;
+    install.env("DESTDIR", destdir);
+    run_in(dir, &mut install)?;
+
+    Ok(())
+}
+
 pub fn autotools_build_and_install(ctx: &BuildCtx, dir: &Path, extra_args: &[&str]) -> Result<()> {
     let destdir = sysroot_abs(ctx)?;
     let mut configure = Command::new("sh");
