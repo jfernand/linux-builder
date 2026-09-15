@@ -1,4 +1,4 @@
-use crate::app::{self, settings_rows, App, Screen, SettingsRow, Status};
+use crate::app::{self, settings_rows, App, Focus, Screen, SettingsRow, Status};
 use crate::registry::Registry;
 use anyhow::Result;
 use buildpack_core::pipeline::Device;
@@ -70,46 +70,91 @@ fn settings_row_index(pred: impl Fn(&SettingsRow) -> bool) -> usize {
 
 fn handle_key(app: &mut App, code: KeyCode) {
     match &mut app.screen {
-        Screen::Dashboard => match code {
-            KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                if app.selected > 0 {
-                    app.selected -= 1;
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if app.selected + 1 < STAGES.len() {
-                    app.selected += 1;
-                }
-            }
-            KeyCode::Char('s') => app.screen = Screen::Settings { selected: 0 },
-            KeyCode::Char('c') => {
-                if app.running.is_none() {
-                    let kind = STAGES[app.selected];
-                    if kind.can_clean() && kind.is_present(&app.cfg, app.reg.as_ref()) {
-                        app.screen = Screen::ConfirmClean { idx: app.selected };
+        Screen::Dashboard => match app.focus {
+            Focus::StageList => match code {
+                KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if app.selected > 0 {
+                        app.selected -= 1;
                     }
                 }
-            }
-            KeyCode::Enter => {
-                if app.running.is_some() {
-                    return;
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if app.selected + 1 < STAGES.len() {
+                        app.selected += 1;
+                    }
                 }
-                if STAGES[app.selected].needs_device() {
-                    app.open_device_picker();
-                } else {
-                    app.run_stage(app.selected, None, false);
+                // Only BuildUserland has anything on the right worth
+                // moving into — every other stage's pane is just a log.
+                KeyCode::Right | KeyCode::Char('l') => {
+                    if STAGES[app.selected] == StageKind::BuildUserland {
+                        let len = app.userland_progress().len();
+                        if len > 0 {
+                            app.package_selected = app.package_selected.min(len - 1);
+                            app.focus = Focus::PackageList;
+                        }
+                    }
                 }
-            }
-            KeyCode::Char('f') => {
-                // Force-rebuild the selected stage. Not meaningful for
-                // WriteUsb (it has no "already done" check to bypass; it
-                // always re-confirms and re-writes), so it's a no-op there.
-                if app.running.is_none() && !STAGES[app.selected].needs_device() {
-                    app.run_stage(app.selected, None, true);
+                KeyCode::Char('s') => app.screen = Screen::Settings { selected: 0 },
+                KeyCode::Char('c') => {
+                    if app.running.is_none() {
+                        let kind = STAGES[app.selected];
+                        if kind.can_clean() && kind.is_present(&app.cfg, app.reg.as_ref()) {
+                            app.screen = Screen::ConfirmClean { idx: app.selected };
+                        }
+                    }
                 }
-            }
-            _ => {}
+                KeyCode::Enter => {
+                    if app.running.is_some() {
+                        return;
+                    }
+                    if STAGES[app.selected].needs_device() {
+                        app.open_device_picker();
+                    } else {
+                        app.run_stage(app.selected, None, false);
+                    }
+                }
+                KeyCode::Char('f') => {
+                    // Force-rebuild the selected stage. Not meaningful for
+                    // WriteUsb (it has no "already done" check to bypass; it
+                    // always re-confirms and re-writes), so it's a no-op there.
+                    if app.running.is_none() && !STAGES[app.selected].needs_device() {
+                        app.run_stage(app.selected, None, true);
+                    }
+                }
+                _ => {}
+            },
+            // The package checklist on BuildUserland's own pane — enter/f
+            // here rebuild just the one package under the cursor, not the
+            // whole stage.
+            Focus::PackageList => match code {
+                KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
+                KeyCode::Left | KeyCode::Char('h') => app.focus = Focus::StageList,
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if app.package_selected > 0 {
+                        app.package_selected -= 1;
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if app.package_selected + 1 < app.userland_progress().len() {
+                        app.package_selected += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    if app.running.is_none()
+                        && let Some(p) = app.userland_progress().into_iter().nth(app.package_selected)
+                    {
+                        app.run_package(&p.id, false);
+                    }
+                }
+                KeyCode::Char('f') => {
+                    if app.running.is_none()
+                        && let Some(p) = app.userland_progress().into_iter().nth(app.package_selected)
+                    {
+                        app.run_package(&p.id, true);
+                    }
+                }
+                _ => {}
+            },
         },
         Screen::Settings { selected } => match code {
             KeyCode::Esc | KeyCode::Char('s') => app.screen = Screen::Dashboard,
@@ -299,8 +344,16 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
                 Status::Success => ("OK ", Color::Green),
                 Status::Failed => ("!! ", Color::Red),
             };
+            // AssembleRootfs's own is_present() just checks a marker file
+            // — it has no idea the sysroot it bulk-copies from changed
+            // underneath it after a userland rebuild, so that's tracked
+            // separately here (App::rootfs_dirty) and shown as "!" (stale)
+            // instead of "*" (present, and actually current).
+            let dirty = *stage == StageKind::AssembleRootfs && app.rootfs_dirty;
             let present = if !stage.can_clean() {
                 "  "
+            } else if dirty {
+                "! "
             } else if stage.is_present(&app.cfg, app.reg.as_ref()) {
                 "* "
             } else {
@@ -314,6 +367,8 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
                 let progress = app.userland_progress();
                 let done = progress.iter().filter(|p| p.done).count();
                 format!("{} ({done}/{})", stage.label(), progress.len())
+            } else if dirty {
+                format!("{} (stale, rebuilds on enter)", stage.label())
             } else {
                 stage.label().to_string()
             };
@@ -326,7 +381,7 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Pipeline stages (* = output present)"));
+        .block(Block::default().borders(Borders::ALL).title("Pipeline stages (* = output present, ! = stale)"));
     f.render_widget(list, area);
 }
 
@@ -346,6 +401,7 @@ fn draw_log_pane(f: &mut Frame, app: &App, area: Rect) {
 fn draw_userland_pane(f: &mut Frame, app: &App, area: Rect) {
     let progress = app.userland_progress();
     let running = app.running == Some(app.selected);
+    let focused = app.focus == Focus::PackageList;
 
     let needed = progress.len() as u16 + 2;
     let list_height = needed.min((area.height / 2).max(3));
@@ -355,23 +411,42 @@ fn draw_userland_pane(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let done_count = progress.iter().filter(|p| p.done).count();
-    let mut current_marked = false;
+    // A single-package run (run_package) marks exactly that row current,
+    // wherever it sits in the list; a whole-stage run always processes
+    // packages in this same order, so the first not-done one is current.
+    let mut whole_stage_current_marked = false;
     let items: Vec<ListItem> = progress
         .iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(i, p)| {
+            let is_current = running
+                && if let Some(running_id) = &app.running_package {
+                    &p.id == running_id
+                } else if !p.done && !whole_stage_current_marked {
+                    whole_stage_current_marked = true;
+                    true
+                } else {
+                    false
+                };
             let (icon, color) = if p.done {
                 ("OK ", Color::Green)
-            } else if running && !current_marked {
-                current_marked = true;
+            } else if is_current {
                 (".. ", Color::Yellow)
             } else {
                 ("   ", Color::Gray)
             };
-            ListItem::new(Line::from(Span::styled(format!("{icon}{}", p.id), Style::default().fg(color))))
+            let mut style = Style::default().fg(color);
+            if focused && i == app.package_selected {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            ListItem::new(Line::from(Span::styled(format!("{icon}{}", p.id), style)))
         })
         .collect();
     let title = format!("Packages ({done_count}/{})", progress.len());
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    let border_color = if focused { Color::Yellow } else { Color::Reset };
+    let list = List::new(items).block(
+        Block::default().borders(Borders::ALL).border_style(Style::default().fg(border_color)).title(title),
+    );
     f.render_widget(list, chunks[0]);
 
     draw_raw_log(f, app, chunks[1], "Build output");
@@ -390,6 +465,11 @@ fn draw_raw_log(f: &mut Frame, app: &App, area: Rect, title: &str) {
 fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let text = if app.running.is_some() {
         "running... (q to quit once idle)".to_string()
+    } else if app.focus == Focus::PackageList {
+        "up/down: select package  enter: build  f: force-rebuild  left: back  q/esc: quit".to_string()
+    } else if STAGES[app.selected] == StageKind::BuildUserland {
+        "up/down: select  right: packages  enter: run  f: force-run  c: clean  s: settings  q/esc: quit"
+            .to_string()
     } else {
         "up/down: select  enter: run  f: force-run  c: clean  s: settings  q/esc: quit".to_string()
     };

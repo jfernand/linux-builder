@@ -1,5 +1,5 @@
 use crate::registry::Registry;
-use crate::stage::STAGES;
+use crate::stage::{StageKind, STAGES};
 use anyhow::Result;
 use buildpack_core::config::DistroConfig;
 use buildpack_core::pipeline::Device;
@@ -87,6 +87,15 @@ pub struct PackageProgress {
     pub done: bool,
 }
 
+/// Which pane arrow/j/k navigation applies to. Only meaningful while
+/// `BuildUserland` is selected — every other stage has no package list to
+/// move into, so nothing ever sets this to `PackageList` for them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    StageList,
+    PackageList,
+}
+
 pub struct App {
     pub config_path: PathBuf,
     pub cfg: DistroConfig,
@@ -95,7 +104,24 @@ pub struct App {
     pub selected: usize,
     pub screen: Screen,
     pub running: Option<usize>,
+    /// Set alongside `running` by `run_package`, cleared by `run_stage` —
+    /// which single package (if any) the in-flight `BuildUserland` run is
+    /// actually building, so the pane can mark *that* row as current
+    /// instead of assuming it's always the first not-done one in order
+    /// (true for a full-stage run, not for an arbitrary single-package
+    /// one).
+    pub running_package: Option<String>,
     pub should_quit: bool,
+    pub focus: Focus,
+    /// Index into `userland_progress()`'s list, while `focus` is
+    /// `PackageList`.
+    pub package_selected: usize,
+    /// Set whenever any userland package build actually runs (whole-stage
+    /// or a single package via `run_package`) — `assemble_rootfs`'s own
+    /// `already_built` check has no idea the sysroot it bulk-copies from
+    /// just changed, so it would otherwise silently skip on a plain
+    /// Enter. Cleared once `AssembleRootfs` itself successfully finishes.
+    pub rootfs_dirty: bool,
     tx: Sender<AppEvent>,
     rx: Receiver<AppEvent>,
 }
@@ -112,7 +138,11 @@ impl App {
             selected: 0,
             screen: Screen::Dashboard,
             running: None,
+            running_package: None,
             should_quit: false,
+            focus: Focus::StageList,
+            package_selected: 0,
+            rootfs_dirty: false,
             tx,
             rx,
         })
@@ -229,8 +259,27 @@ impl App {
                     }
                 }
                 AppEvent::Done(idx, success) => {
-                    self.stages[idx].status = if success { Status::Success } else { Status::Failed };
+                    // BuildUserland alone can now finish a run that
+                    // touched only one package (run_package) — success
+                    // there doesn't mean the whole stage is done, so
+                    // "OK" (Status::Success) is only right once every
+                    // package actually is; otherwise leave it Idle and
+                    // let the live "(done/total)" count in the stage
+                    // list speak for itself.
+                    self.stages[idx].status = if !success {
+                        Status::Failed
+                    } else if STAGES[idx] == StageKind::BuildUserland
+                        && !self.userland_progress().iter().all(|p| p.done)
+                    {
+                        Status::Idle
+                    } else {
+                        Status::Success
+                    };
+                    if success && STAGES[idx] == StageKind::AssembleRootfs {
+                        self.rootfs_dirty = false;
+                    }
                     self.running = None;
+                    self.running_package = None;
                 }
             }
         }
@@ -298,18 +347,55 @@ impl App {
         if self.running.is_some() {
             return;
         }
+        self.running_package = None;
+        let kind = STAGES[idx];
+        if kind == StageKind::BuildUserland {
+            self.rootfs_dirty = true;
+        }
+        let mut args = vec!["--config".to_string(), self.config_path.to_string_lossy().to_string()];
+        args.extend(kind.subcommand_args(device));
+        // AssembleRootfs's own already_built check has no way to know the
+        // sysroot it bulk-copies from just changed underneath it — force
+        // it whenever we know that's true, so a plain Enter on a dirty
+        // AssembleRootfs row actually redoes the copy instead of silently
+        // skipping ("already assembled").
+        let force = force || (kind == StageKind::AssembleRootfs && self.rootfs_dirty);
+        if force {
+            args.push("--force".to_string());
+        }
+        self.spawn_tracked(idx, args);
+    }
+
+    /// Rebuilds one userland package by id (`distro build-pkg <id>`),
+    /// instead of the whole `BuildUserland` stage — what the dashboard's
+    /// package checklist's enter/f run when focused on a single row.
+    /// Tracked under `BuildUserland`'s own log/status, same as a full
+    /// stage run, since there's no separate slot for a single package.
+    pub fn run_package(&mut self, pkg_id: &str, force: bool) {
+        if self.running.is_some() {
+            return;
+        }
+        self.running_package = Some(pkg_id.to_string());
+        self.rootfs_dirty = true;
+        let Some(idx) = STAGES.iter().position(|k| *k == StageKind::BuildUserland) else { return };
+        let mut args = vec![
+            "--config".to_string(),
+            self.config_path.to_string_lossy().to_string(),
+            "build-pkg".to_string(),
+            pkg_id.to_string(),
+        ];
+        if force {
+            args.push("--force".to_string());
+        }
+        self.spawn_tracked(idx, args);
+    }
+
+    fn spawn_tracked(&mut self, idx: usize, args: Vec<String>) {
         self.running = Some(idx);
         self.stages[idx].status = Status::Running;
         self.stages[idx].log.clear();
 
-        let kind = STAGES[idx];
         let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("linux-builder"));
-        let mut args = vec!["--config".to_string(), self.config_path.to_string_lossy().to_string()];
-        args.extend(kind.subcommand_args(device));
-        if force {
-            args.push("--force".to_string());
-        }
-
         let child = Command::new(&exe)
             .args(&args)
             .stdin(Stdio::null())
