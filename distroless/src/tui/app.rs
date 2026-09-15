@@ -1,8 +1,8 @@
 use super::stage::STAGES;
-use builder_core::config::Config;
-use builder_core::stages::kernel::FEATURE_PACKS;
-use builder_core::stages::usb::Device;
 use anyhow::Result;
+use buildpack_core::config::DistroConfig;
+use buildpack_core::pipeline::Device;
+use buildpacks::kernel::FEATURE_PACKS;
 use std::collections::VecDeque;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -80,7 +80,7 @@ pub enum AppEvent {
 
 pub struct App {
     pub config_path: PathBuf,
-    pub cfg: Config,
+    pub cfg: DistroConfig,
     pub stages: Vec<StageState>,
     pub selected: usize,
     pub screen: Screen,
@@ -92,7 +92,7 @@ pub struct App {
 
 impl App {
     pub fn new(config_path: PathBuf) -> Result<Self> {
-        let cfg = Config::load(&config_path)?;
+        let cfg = DistroConfig::load(&config_path)?;
         let (tx, rx) = mpsc::channel();
         Ok(App {
             config_path,
@@ -112,23 +112,59 @@ impl App {
         self.cfg.save(&self.config_path)
     }
 
+    /// The `[kernel]` table, inserted empty if absent — every mutator
+    /// below needs a table to write into.
+    fn kernel_table(&mut self) -> &mut toml::value::Table {
+        self.cfg
+            .packages
+            .entry("kernel".to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()))
+            .as_table_mut()
+            .expect("[kernel] is a table")
+    }
+
+    fn kernel_features(&self) -> Vec<String> {
+        self.cfg
+            .packages
+            .get("kernel")
+            .and_then(|t| t.get("features"))
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
     pub fn is_feature_enabled(&self, key: &str) -> bool {
-        self.cfg.kernel.features.iter().any(|f| f == key)
+        self.kernel_features().iter().any(|f| f == key)
+    }
+
+    /// Flips a feature's enabled state in memory only — no save. Used both
+    /// by `toggle_feature` and by its caller's best-effort revert-on-error.
+    pub fn set_feature_enabled(&mut self, key: &str, enabled: bool) {
+        let mut features = self.kernel_features();
+        let present = features.iter().position(|f| f == key);
+        match (enabled, present) {
+            (true, None) => features.push(key.to_string()),
+            (false, Some(pos)) => {
+                features.remove(pos);
+            }
+            _ => {}
+        }
+        let table = self.kernel_table();
+        table.insert(
+            "features".to_string(),
+            toml::Value::Array(features.into_iter().map(toml::Value::String).collect()),
+        );
     }
 
     pub fn toggle_feature(&mut self, key: &str) -> Result<()> {
-        let features = &mut self.cfg.kernel.features;
-        if let Some(pos) = features.iter().position(|f| f == key) {
-            features.remove(pos);
-        } else {
-            features.push(key.to_string());
-        }
+        self.set_feature_enabled(key, !self.is_feature_enabled(key));
         self.cfg.save(&self.config_path)
     }
 
     /// Sets `kernel.logo_file` and persists it.
     pub fn set_logo_file(&mut self, path: PathBuf) -> Result<()> {
-        self.cfg.kernel.logo_file = Some(path);
+        let table = self.kernel_table();
+        table.insert("logo_file".to_string(), toml::Value::String(path.to_string_lossy().into_owned()));
         self.cfg.save(&self.config_path)
     }
 
@@ -138,8 +174,11 @@ impl App {
     pub fn open_file_picker(&mut self) {
         let start_dir = self
             .cfg
-            .kernel
-            .logo_file
+            .packages
+            .get("kernel")
+            .and_then(|t| t.get("logo_file"))
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
             .as_ref()
             .and_then(|p| p.parent())
             .filter(|p| !p.as_os_str().is_empty())
@@ -188,7 +227,7 @@ impl App {
     }
 
     pub fn open_device_picker(&mut self) {
-        match builder_core::stages::usb::list_removable_devices() {
+        match buildpack_core::pipeline::list_removable_devices() {
             Ok(devices) => {
                 self.screen = Screen::DevicePicker { devices, selected: 0, error: None };
             }

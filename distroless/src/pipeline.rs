@@ -81,7 +81,7 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
     ])
 }
 
-fn ctx_for(id: &str, cfg: &DistroConfig) -> BuildCtx {
+pub fn ctx_for(id: &str, cfg: &DistroConfig) -> BuildCtx {
     match id {
         "kernel" => kernel_ctx(cfg),
         "busybox" => ctx_with_sources(cfg, "busybox"),

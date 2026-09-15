@@ -1,7 +1,7 @@
-use crate::stages::toolchain::MUSL_TARGET;
+use crate::pipeline;
 use anyhow::Result;
-use builder_core::config::Config;
-use std::path::PathBuf;
+use buildpack_core::config::DistroConfig;
+use buildpack_core::Buildpack;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StageKind {
@@ -67,57 +67,79 @@ impl StageKind {
         }
     }
 
-    /// On-disk outputs this stage produces. Used both to show whether the
-    /// stage's work is already present and, for `clean`, what to remove to
-    /// force it to redo that work. Empty for stages with nothing of their
-    /// own to track: `BuildToolchain` touches global system/toolchain
-    /// state, and `WriteUsb`/`TestQemu` don't persist anything under
-    /// `build_dir`.
-    fn output_paths(&self, cfg: &Config) -> Vec<PathBuf> {
-        match self {
-            StageKind::Fetch => vec![
-                cfg.sources_dir(),
-                cfg.kernel_build_dir(),
-                cfg.busybox_build_dir(),
-                cfg.uutils_build_dir(),
-            ],
-            StageKind::BuildToolchain => vec![],
-            StageKind::BuildKernel => vec![cfg.kernel_build_dir().join("arch/x86/boot/bzImage")],
-            StageKind::BuildUserland => vec![
-                cfg.uutils_build_dir()
-                    .join("target")
-                    .join(MUSL_TARGET)
-                    .join("release")
-                    .join("coreutils"),
-                cfg.busybox_build_dir().join("busybox"),
-            ],
-            StageKind::AssembleRootfs => vec![cfg.rootfs_dir()],
-            StageKind::MakeImage => vec![cfg.output_image()],
-            StageKind::WriteUsb => vec![],
-            StageKind::TestQemu => vec![],
-        }
-    }
-
-    /// Whether this stage can be cleaned at all (see `output_paths`).
+    /// Whether this stage can be cleaned at all.
     pub fn can_clean(&self) -> bool {
         !matches!(self, StageKind::BuildToolchain | StageKind::WriteUsb | StageKind::TestQemu)
     }
 
     /// Whether every output this stage produces is already on disk.
-    pub fn is_present(&self, cfg: &Config) -> bool {
-        let paths = self.output_paths(cfg);
-        !paths.is_empty() && paths.iter().all(|p| p.exists())
+    /// `Fetch`/`BuildKernel`/`BuildUserland` delegate to the real
+    /// `Buildpack::is_built` for each package involved; `AssembleRootfs`/
+    /// `MakeImage` check `DistroConfig`'s own path helpers directly (no
+    /// `Buildpack`/`PipelineStage` equivalent tracks a single marker for
+    /// them); `BuildToolchain`/`WriteUsb`/`TestQemu` have no persisted
+    /// state to check.
+    pub fn is_present(&self, cfg: &DistroConfig) -> bool {
+        match self {
+            StageKind::Fetch => {
+                pipeline::kernel_ctx(cfg).sources_dir.exists()
+                    && pipeline::ctx_for("uutils", cfg).sources_dir.exists()
+                    && pipeline::ctx_for("busybox", cfg).sources_dir.exists()
+            }
+            StageKind::BuildToolchain => false,
+            StageKind::BuildKernel => {
+                let Ok(kernel) = pipeline::kernel_buildpack(cfg) else { return false };
+                kernel.is_built(&pipeline::kernel_ctx(cfg))
+            }
+            StageKind::BuildUserland => {
+                let Ok(packs) = pipeline::all_packages(cfg) else { return false };
+                packs
+                    .iter()
+                    .filter(|p| p.id() != "kernel")
+                    .all(|p| p.is_built(&pipeline::ctx_for(p.id(), cfg)))
+            }
+            StageKind::AssembleRootfs => cfg.rootfs_dir().join("etc/inittab").exists(),
+            StageKind::MakeImage => cfg.output_image().exists(),
+            StageKind::WriteUsb | StageKind::TestQemu => false,
+        }
     }
 
     /// Remove this stage's outputs so it (and anything downstream that
     /// depends on it) will redo its work next run.
-    pub fn clean(&self, cfg: &Config) -> Result<()> {
-        for path in self.output_paths(cfg) {
-            if path.is_dir() {
-                std::fs::remove_dir_all(&path)?;
-            } else if path.exists() {
-                std::fs::remove_file(&path)?;
+    pub fn clean(&self, cfg: &DistroConfig) -> Result<()> {
+        match self {
+            StageKind::Fetch => {
+                for dir in [
+                    pipeline::kernel_ctx(cfg).sources_dir,
+                    pipeline::ctx_for("uutils", cfg).sources_dir,
+                    pipeline::ctx_for("busybox", cfg).sources_dir,
+                ] {
+                    if dir.exists() {
+                        std::fs::remove_dir_all(&dir)?;
+                    }
+                }
             }
+            StageKind::BuildKernel => {
+                pipeline::kernel_buildpack(cfg)?.clean(&pipeline::kernel_ctx(cfg))?;
+            }
+            StageKind::BuildUserland => {
+                for pack in pipeline::all_packages(cfg)?.iter().filter(|p| p.id() != "kernel") {
+                    pack.clean(&pipeline::ctx_for(pack.id(), cfg))?;
+                }
+            }
+            StageKind::AssembleRootfs => {
+                let dir = cfg.rootfs_dir();
+                if dir.exists() {
+                    std::fs::remove_dir_all(&dir)?;
+                }
+            }
+            StageKind::MakeImage => {
+                let path = cfg.output_image();
+                if path.exists() {
+                    std::fs::remove_file(&path)?;
+                }
+            }
+            StageKind::BuildToolchain | StageKind::WriteUsb | StageKind::TestQemu => {}
         }
         Ok(())
     }

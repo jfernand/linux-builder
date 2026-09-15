@@ -1,10 +1,10 @@
 mod app;
 mod stage;
 
-use builder_core::stages::kernel::FEATURE_PACKS;
-use builder_core::stages::usb::Device;
 use anyhow::Result;
 use app::{settings_rows, App, Screen, SettingsRow, Status};
+use buildpack_core::pipeline::Device;
+use buildpacks::kernel::FEATURE_PACKS;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, ExecutableCommand};
@@ -137,13 +137,10 @@ fn handle_key(app: &mut App, code: KeyCode) {
                 SettingsRow::Hostname | SettingsRow::CustomLogo => {} // press `e` to edit
                 SettingsRow::Feature(i) => {
                     let key = FEATURE_PACKS[i].key;
+                    let was_enabled = app.is_feature_enabled(key);
                     if app.toggle_feature(key).is_err() {
                         // Best-effort revert, same as the networking toggle above.
-                        if let Some(pos) = app.cfg.kernel.features.iter().position(|f| f == key) {
-                            app.cfg.kernel.features.remove(pos);
-                        } else {
-                            app.cfg.kernel.features.push(key.to_string());
-                        }
+                        app.set_feature_enabled(key, was_enabled);
                     }
                 }
             },
@@ -418,10 +415,11 @@ fn draw_settings(f: &mut Frame, area: Rect, app: &App, selected: usize) {
                     "   ",
                     "  Custom logo file".to_string(),
                     app.cfg
-                        .kernel
-                        .logo_file
-                        .as_ref()
-                        .map(|p| format!("{} (e to change)", p.display()))
+                        .packages
+                        .get("kernel")
+                        .and_then(|t| t.get("logo_file"))
+                        .and_then(|v| v.as_str())
+                        .map(|p| format!("{p} (e to change)"))
                         .unwrap_or_else(|| "stock penguin (e to pick a file)".to_string()),
                 ),
                 SettingsRow::Feature(idx) => {

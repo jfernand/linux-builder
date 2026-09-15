@@ -140,17 +140,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "builder-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "serde",
- "serde_json",
- "toml",
-]
-
-[[package]]
 name = "buildpack-core"
 version = "0.1.0"
 dependencies = [
@@ -425,7 +414,6 @@ name = "distro"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "builder-core",
  "buildpack-core",
  "buildpacks",
  "clap",
@@ -445,7 +433,6 @@ name = "distroless"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "builder-core",
  "buildpack-core",
  "buildpacks",
  "clap",
