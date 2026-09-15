@@ -61,6 +61,22 @@ pub enum Command {
     /// List named kernel feature packs that can be enabled via
     /// `kernel.features` in the config file (or the TUI settings screen)
     ListFeatures,
+    /// List every buildpack this distro builds, with its build status
+    ListPackages,
+    /// Fetch (download/extract/patch) one package by id, ignoring every
+    /// other package
+    FetchPkg {
+        id: String,
+    },
+    /// Build one package by id, ignoring every other package (does not
+    /// fetch it first — run fetch-pkg or fetch first)
+    BuildPkg {
+        id: String,
+    },
+    /// Remove one package's build outputs so it rebuilds next run
+    CleanPkg {
+        id: String,
+    },
     /// Write the built image to a removable device (DESTRUCTIVE)
     WriteUsb {
         /// Target device, e.g. /dev/sdb (must be a whole disk, not a partition)

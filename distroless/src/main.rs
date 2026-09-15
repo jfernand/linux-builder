@@ -4,7 +4,7 @@ mod rootfs;
 mod stages;
 mod tui;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use buildpack_core::config::DistroConfig;
 use buildpack_core::pipeline::{MakeImage, PipelineStage, TestQemu, WriteUsb};
 use buildpack_core::Buildpack;
@@ -31,6 +31,10 @@ fn main() -> Result<()> {
         Command::TestQemu { window } => TestQemu { window }.run(&pipeline::pipeline_ctx(&cfg)?, cli.force),
         Command::ListDevices => list_devices(),
         Command::ListFeatures => list_features(),
+        Command::ListPackages => list_packages(&cfg),
+        Command::FetchPkg { id } => with_package(&cfg, &id, |p, ctx| p.fetch(ctx, cli.force)),
+        Command::BuildPkg { id } => with_package(&cfg, &id, |p, ctx| p.build(ctx, cli.force)),
+        Command::CleanPkg { id } => with_package(&cfg, &id, |p, ctx| p.clean(ctx)),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
         Command::All => run_all(&cfg, cli.force),
         Command::Tui => tui::run(cli.config.clone()),
@@ -92,6 +96,29 @@ fn list_features() -> Result<()> {
         println!("{:<10} {}", pack.key, pack.description);
     }
     Ok(())
+}
+
+fn list_packages(cfg: &DistroConfig) -> Result<()> {
+    for pack in pipeline::all_packages(cfg)? {
+        let ctx = pipeline::ctx_for(pack.id(), cfg);
+        let status = if pack.is_built(&ctx) { "built" } else { "not built" };
+        let d = pack.describe();
+        println!("{:<20} {:<10} {}", d.id, status, d.summary);
+    }
+    Ok(())
+}
+
+/// Finds one buildpack by id and runs `f` against it — the shared lookup
+/// behind `fetch-pkg`/`build-pkg`/`clean-pkg`.
+fn with_package(
+    cfg: &DistroConfig,
+    id: &str,
+    f: impl FnOnce(&Box<dyn Buildpack>, &buildpack_core::BuildCtx) -> Result<()>,
+) -> Result<()> {
+    let packs = pipeline::all_packages(cfg)?;
+    let pack = packs.iter().find(|p| p.id() == id).with_context(|| format!("no such package: {id}"))?;
+    let ctx = pipeline::ctx_for(pack.id(), cfg);
+    f(pack, &ctx)
 }
 
 fn list_devices() -> Result<()> {

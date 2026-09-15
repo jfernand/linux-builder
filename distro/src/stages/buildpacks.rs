@@ -102,7 +102,7 @@ pub fn ctx_with_sources(cfg: &DistroConfig, subdir: &str) -> BuildCtx {
 /// buildpack id — `None` means "use the generic shared `sources/` dir"
 /// (the 8 cairo/weston-chain packages, plus `distro_init`, which is
 /// `Source::InTree` and never reads `sources_dir` at all).
-fn ctx_for(id: &str, cfg: &DistroConfig) -> BuildCtx {
+pub fn ctx_for(id: &str, cfg: &DistroConfig) -> BuildCtx {
     let subdir = match id {
         "kernel" => "kernel",
         "uutils" => return BuildCtx { sources_dir: cfg.build_dir.clone(), ..generic_ctx(cfg) },
