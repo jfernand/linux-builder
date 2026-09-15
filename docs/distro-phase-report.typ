@@ -297,7 +297,7 @@ properties:
   ([`ENV{KEY}==`], [Match a property attached by an *earlier* rule or a previous pass — rule evaluation is cumulative, not one-shot.]),
   ([`SYMLINK+=`], [Add a stable, descriptive symlink to the node `devtmpfs` already created — `/dev/disk/by-id/...`, `/dev/input/by-path/...` — so nothing has to hardcode a `sdX`/`eventN` name that can change between boots.]),
   ([`MODE=`, `OWNER=`, `GROUP=`], [Fix up the permissions `devtmpfs`'s default was never going to get right for every device class.]),
-  ([`TAG+=`], [Attach a label other tools query for later — `seatd` (§4) and `libinput` (§10.3) both rely on devices being tagged consistently to recognize what they are.]),
+  ([`TAG+=`], [Attach a label other tools query for later — `seatd` (§4) and `libinput` (§10.3.3) both rely on devices being tagged consistently to recognize what they are.]),
   ([`RUN+=`], [Run an external program as part of handling this event.]),
 )
 
@@ -329,7 +329,7 @@ Beyond the rules pass, `udevd` maintains a live database under
 determined about it — its tags, its properties, its stable names. This
 is what `udevadm info --query=all --name=<path>` actually reads, and
 what lets other components ask "what kind of device is this" without
-re-deriving it themselves; `libinput` (§10.3) and `seatd`'s own device
+re-deriving it themselves; `libinput` (§10.3.3) and `seatd`'s own device
 filtering (§4) both depend on this database being populated and current,
 not just on the raw `/dev` node existing.
 
@@ -512,7 +512,8 @@ a client's window on an actual display" passes through several distinct
 layers, each solving a different part of the problem:
 
 #layerstack(
-  ("DRM/KMS (kernel)", "owns the GPU, buffers, mode-setting"),
+  ("GPU driver (kernel)", "i915, amdgpu, virtio_gpu, … — one per GPU family"),
+  ("DRM/KMS core (kernel)", "the generic buffer/mode-setting framework every driver above plugs into"),
   ("libdrm", "ioctl wrapper every layer above builds on"),
   ("Mesa / Gallium", "GL calls → this GPU's own commands"),
   ("EGL / GBM", "context + buffer allocation"),
@@ -522,7 +523,8 @@ layers, each solving a different part of the problem:
 #dtable(
   columns: (auto, 1fr),
   ([Layer], [What it actually is]),
-  ([DRM (kernel)], [The kernel subsystem that owns the GPU at the lowest level: hands out and tracks buffers, submits command buffers, configures what's actually scanned out to a display. Has no idea what "draw a triangle" means — purely a resource-management, submission, and mode-setting interface.]),
+  ([GPU driver (kernel)], [The actual per-hardware driver — `i915` (Intel), `amdgpu`, `virtio_gpu` (for a virtual machine's paravirtualized GPU), and so on. Implements DRM's generic callbacks *for one specific GPU family*; nothing above this layer talks to hardware registers directly.]),
+  ([DRM/KMS (kernel)], [The generic subsystem every GPU driver plugs into: hands out and tracks buffers, submits command buffers, configures what's actually scanned out to a display. Has no idea what "draw a triangle" means, and no hardware-specific code of its own — purely a resource-management, submission, and mode-setting *framework*.]),
   ([Mesa], [The userspace library that turns OpenGL/OpenGL ES calls into whatever a specific GPU actually understands.]),
   ([Gallium], [Mesa's own internal plumbing for doing that translation once per GPU *family* rather than once per API. A "Gallium driver" is the translator for one specific GPU — or, for a virtual machine, one specific *virtual* GPU.]),
   ([DRI], [Direct Rendering Infrastructure — the convention by which an application actually finds and loads the right driver at runtime.]),
@@ -532,8 +534,13 @@ layers, each solving a different part of the problem:
 
 == DRM and KMS: what the kernel actually owns
 
-*DRM* (Direct Rendering Manager) is really two jobs in one subsystem.
-The first, *GEM* (Graphics Execution Manager), is buffer-object
+*DRM* (Direct Rendering Manager) is a generic *framework*, not hardware
+code itself — the actual per-GPU driver (`i915`, `amdgpu`, `virtio_gpu`,
+…) is a separate kernel module that implements DRM's callbacks for one
+specific GPU family; DRM/KMS core provides the buffer/mode-setting
+machinery every one of those drivers plugs into, uniformly, regardless
+of which GPU is actually underneath. DRM itself is really two jobs in
+one subsystem. The first, *GEM* (Graphics Execution Manager), is buffer-object
 management: every chunk of GPU-accessible memory — a texture, a
 framebuffer, a command buffer — is a GEM object, referenced by a handle
 the kernel hands back to whichever process allocated it, and GEM is what
@@ -733,7 +740,7 @@ rather than the host's own glibc.
   align: (left, left, left),
   ([Package], [Provides], [Notes]),
   ([Linux kernel], [`vmlinuz`], [The same `Kernel` buildpack `distro` uses — kernel builds have no musl/glibc-specific behavior.]),
-  ([uutils/coreutils], [`ls`, `cat`, `cp`, …], [The musl variant of the same `Uutils` buildpack `distro` uses (§10.3) — one multi-call binary, statically linked, musl-static by default.]),
+  ([uutils/coreutils], [`ls`, `cat`, `cp`, …], [The musl variant of the same `Uutils` buildpack `distro` uses (§10.3.1) — one multi-call binary, statically linked, musl-static by default.]),
   ([BusyBox], [shell, init, `mount`, `getty`, and the rest of a minimal system toolbox], [Built via a curated Kconfig: `allnoconfig`, then a specific applet list enabled and cross-compiled against musl, statically linked.]),
 )
 
@@ -923,6 +930,15 @@ pack.
 
 == Packages
 
+`distro` builds a separate, purpose-specific package for each job a
+desktop-capable system needs done — laid out here in dependency order,
+bottom of the stack first: the static base first (needs nothing else
+already built), then the seat/session layer, then the Wayland-core
+libraries, then the graphics stack proper, then everything Weston itself
+needs.
+
+=== The static base
+
 Five packages exist purely to get from a mounted rootfs to a real,
 authenticated shell — the glibc equivalent of what BusyBox does as one
 binary, spread across separate upstream projects because glibc-land has
@@ -940,6 +956,8 @@ track.
   ([shadow-utils], [4.17.4], [`login`, `passwd`], [Real `/etc/passwd` + `/etc/shadow` authentication.]),
 )
 
+=== Seat & session daemons
+
 Three daemons do what a desktop session needs before any compositor can
 run — none of them optional, the floor a compositor stands on rather
 than decoration:
@@ -952,6 +970,8 @@ than decoration:
   ([dbus], [1.16.2], [The system message bus. Runs as `root` here — the rootfs has no unprivileged `messagebus` user yet to drop privileges to.]),
   ([eudev], [3.2.14], [The systemd-independent `udev` fork described in §3. Exists in this pipeline specifically because `libinput` hard-depends on `libudev`.]),
 )
+
+=== The Wayland-core libraries
 
 Seven libraries sit ready for a compositor to link against — nothing in
 this group runs on its own; verification at this layer is "builds and
@@ -970,9 +990,21 @@ installs cleanly," not "does something observable":
   ([libinput], [1.31.3], [Turns raw evdev events into pointer/keyboard/touch/gesture events a compositor actually wants.]),
 )
 
-The graphics stack proper — from §6's conceptual layering down to actual
-built libraries, scoped to QEMU's own virtual GPU rather than real
-hardware:
+=== The graphics stack
+
+From §6's conceptual layering down to what's actually built here — the
+one place in this whole table where a *kernel-side* driver matters as
+much as anything built from userspace source, since nothing above it
+works without the right one already compiled in via `kernel.features`
+(§10.2.3):
+
+#layerstack(
+  ("virtio_gpu (kernel driver)", "enabled via the graphics feature pack, §10.2"),
+  ("DRM/KMS core (kernel)", "generic framework virtio_gpu plugs into"),
+  ("libdrm", "2.4.134 — generic core only, no vendor sub-libraries"),
+  ("Mesa / Gallium", "virgl + softpipe Gallium drivers, no LLVM"),
+  ("Weston", "the compositor actually hosting a client"),
+)
 
 #dtable(
   columns: (auto, auto, 1fr),
@@ -981,6 +1013,18 @@ hardware:
   ([libdrm], [2.4.134], [The kernel-userspace ioctl wrapper every GPU-facing library builds on — every vendor-specific sub-library disabled, virtio-gpu needs only the generic core.]),
   ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback). Vulkan and GLX/X11 both disabled — Wayland/EGL/GLES only, no LLVM needed for either driver.]),
 )
+
+The kernel driver itself — `virtio_gpu`, part of the `graphics` feature
+pack (§10.2.3, `CONFIG_DRM_VIRTIO_GPU`) — is not a separate buildpack:
+it's compiled directly into `vmlinuz` alongside the rest of the kernel,
+the same `y`-not-`m` choice §10.2.2 covers for every other driver this
+kernel needs. Nothing in `libdrm`/Mesa's own build depends on which GPU
+driver ends up underneath at runtime — that binding happens at boot,
+when the kernel probes for a matching device and the driver it finds
+(virtio-gpu, here, since that's what QEMU presents) is whatever DRI then
+loads a Gallium driver against (§6.3).
+
+=== Hosting a compositor: the Weston chain
 
 Hosting an actual compositor needs six more packages, plus a keyboard
 layout data package:
@@ -1012,7 +1056,7 @@ layout data package:
 
 == The sysroot: how these packages find each other
 
-Static-base packages (§10.3's first table) never need each other at
+Static-base packages (§10.3.1) never need each other at
 build time — each just needs the host's gcc. Everything from the seat
 layer onward does: `wayland-protocols` needs `wayland-scanner` on `PATH`
 at its own build time, and `libinput` needs `eudev`'s installed
