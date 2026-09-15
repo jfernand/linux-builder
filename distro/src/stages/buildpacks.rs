@@ -52,7 +52,7 @@ use buildpacks::wayland_protocols::WaylandProtocols;
 use buildpacks::weston::Weston;
 use buildpacks::xkeyboard_config::XkeyboardConfig;
 use buildpacks::zlib::Zlib;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn configured<T: Buildpack + Default>(cfg: &DistroConfig, key: &str) -> Result<T> {
     let mut bp = T::default();
@@ -77,7 +77,18 @@ fn generic_ctx(cfg: &DistroConfig) -> BuildCtx {
         networking: cfg.networking,
         jobs: jobs(),
         image: cfg.image.clone(),
+        kernel_bzimage: PathBuf::new(), // only `pipeline_ctx` below fills this in
     }
+}
+
+/// The `BuildCtx` `PipelineStage` impls (`make-image`/`test-qemu`/
+/// `write-usb`) run against — `generic_ctx` plus the one extra thing they
+/// need that no buildpack does: the kernel's own bzImage output path.
+pub fn pipeline_ctx(cfg: &DistroConfig) -> Result<BuildCtx> {
+    let kernel = kernel_buildpack(cfg)?;
+    let kctx = kernel_ctx(cfg);
+    let bzimage = kernel.outputs(&kctx).into_iter().next().map(|o| o.path).unwrap_or_default();
+    Ok(BuildCtx { kernel_bzimage: bzimage, ..generic_ctx(cfg) })
 }
 
 /// Points `sources_dir` at the OLD pipeline's per-package build

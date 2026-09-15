@@ -8,6 +8,7 @@ pub mod build;
 pub mod config;
 pub mod graph;
 pub mod install;
+pub mod pipeline;
 pub mod run;
 
 use anyhow::Result;
@@ -80,9 +81,9 @@ pub struct Description {
 /// Generic pipeline paths every buildpack needs. Deliberately NOT the
 /// whole distro `Config` — a buildpack only ever needs these plus its own
 /// already-`configure()`d fields, never another buildpack's config.
-/// `image` is only read by the 4 `PipelineStage` impls (`pipeline`
-/// module) — every `Buildpack` ignores it, the same way static-artifact
-/// packages already ignore `sysroot_dir`.
+/// `image`/`kernel_bzimage` are only read by the `PipelineStage` impls
+/// (`pipeline` module) — every `Buildpack` ignores them, the same way
+/// static-artifact packages already ignore `sysroot_dir`.
 #[derive(Clone)]
 pub struct BuildCtx {
     pub sources_dir: PathBuf,
@@ -93,6 +94,10 @@ pub struct BuildCtx {
     pub networking: bool,
     pub jobs: usize,
     pub image: config::ImageSettings,
+    /// The kernel buildpack's bzImage output path — `make_image` embeds
+    /// it, nothing else reads it. Populated by the caller (it already has
+    /// to construct the kernel's own `BuildCtx`/outputs to build it).
+    pub kernel_bzimage: PathBuf,
 }
 
 pub trait Buildpack {

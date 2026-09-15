@@ -1,6 +1,6 @@
-use builder_core::config::Config;
-use builder_core::stages::toolchain::musl_target;
+use crate::stages::toolchain::MUSL_TARGET;
 use anyhow::Result;
+use builder_core::config::Config;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -86,7 +86,7 @@ impl StageKind {
             StageKind::BuildUserland => vec![
                 cfg.uutils_build_dir()
                     .join("target")
-                    .join(musl_target())
+                    .join(MUSL_TARGET)
                     .join("release")
                     .join("coreutils"),
                 cfg.busybox_build_dir().join("busybox"),

@@ -17,7 +17,7 @@ use buildpack_core::{BuildCtx, Buildpack, InstallMode};
 use buildpacks::busybox::Busybox;
 use buildpacks::kernel::Kernel;
 use buildpacks::uutils::Uutils;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn configured<T: Buildpack + Default>(cfg: &DistroConfig, key: &str) -> Result<T> {
     let mut bp = T::default();
@@ -42,7 +42,18 @@ fn base_ctx(cfg: &DistroConfig) -> BuildCtx {
         networking: cfg.networking,
         jobs: jobs(),
         image: cfg.image.clone(),
+        kernel_bzimage: PathBuf::new(), // only `pipeline_ctx` below fills this in
     }
+}
+
+/// The `BuildCtx` `PipelineStage` impls (`make-image`/`test-qemu`/
+/// `write-usb`) run against — `base_ctx` plus the kernel's own bzImage
+/// output path, which no buildpack needs but `make_image` does.
+pub fn pipeline_ctx(cfg: &DistroConfig) -> Result<BuildCtx> {
+    let kernel = kernel_buildpack(cfg)?;
+    let kctx = kernel_ctx(cfg);
+    let bzimage = kernel.outputs(&kctx).into_iter().next().map(|o| o.path).unwrap_or_default();
+    Ok(BuildCtx { kernel_bzimage: bzimage, ..base_ctx(cfg) })
 }
 
 fn ctx_with_sources(cfg: &DistroConfig, subdir: &str) -> BuildCtx {
