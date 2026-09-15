@@ -1213,6 +1213,19 @@ packages need, plus the dynamic linker itself and `/etc/passwd` +
   ("Later", [More COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
 )
 
+#callout(kind: "note", "A standing rule for everything above")[
+  Anything that ends up *in* the built image — a buildpack's runtime
+  output, a daemon, a COSMIC component, any future app — must be Rust or
+  C. No Python, Ruby, Perl, or Node runtime ships on target. This is the
+  same reasoning §10.3.1 already gives for choosing uutils over BusyBox,
+  made explicit as a constraint on every package picked from here on —
+  network stack, audio stack, and the COSMIC components above included.
+  Host-side build tooling is exempt: `meson` (Python) is infrastructure,
+  not distro content, the same carve-out as `gcc`/`ninja`/`pkg-config`
+  (§10.4.2) — only a package's *runtime* language is constrained, never
+  its build system.
+]
+
 And three deliberate gaps in what's already built, worth knowing about
 rather than discovering later:
 
