@@ -165,6 +165,28 @@ pub fn cargo_build_release(dir: &Path, target: &str, extra_args: &[&str], env: &
     run_in(dir, &mut cmd)
 }
 
+/// Native `cargo build --release`, with the sysroot's `PKG_CONFIG_PATH`/
+/// `PKG_CONFIG_SYSROOT_DIR` applied the same way `meson_build_and_install`/
+/// `autotools_build_and_install` do — for Rust packages whose build.rs or
+/// `*-sys` crates use `pkg-config` to link against sysroot C libraries
+/// (unlike `uutils`, a pure-Rust cross-target build with no C
+/// dependencies at all, or `distro-init`, in-tree with no sysroot
+/// dependencies). No explicit `--target`: these are native builds.
+pub fn cargo_build_release_sysroot(
+    ctx: &BuildCtx,
+    dir: &Path,
+    extra_args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<()> {
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build").arg("--release").args(extra_args);
+    sysroot_env(ctx, &mut cmd)?;
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    run_in(dir, &mut cmd)
+}
+
 /// Generic tarball/git fetch+extract+patch, used as `Buildpack::fetch`'s
 /// default implementation.
 pub fn default_fetch<T: Buildpack + ?Sized>(bp: &T, ctx: &BuildCtx, force: bool) -> Result<()> {

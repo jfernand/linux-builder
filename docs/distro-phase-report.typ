@@ -507,6 +507,29 @@ here does the passwd/shadow check directly.
 
 = Graphics, Conceptually: From a Kernel Driver to a Frame on Screen
 
+== What a compositor actually does
+
+Every other layer in this section exists to serve one job: a
+*compositor* is the one program that owns the display and decides what
+actually appears on it. Concretely, it's three responsibilities in one
+process:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Job], [What that means]),
+  ([Window server], [Every other graphical program — a *client*, in Wayland's own terminology — connects to the compositor over a socket and hands it rendered content, rather than drawing to the screen itself. No client ever touches the display directly.]),
+  ([Compositing], [With more than one window (or a panel, a cursor, a notification popup) on screen at once, something has to combine all of their separately-rendered content into the single final image actually sent to the display — that combining step is what gives "compositor" its name.]),
+  ([Input routing], [Keyboard and pointer/touch events arrive as raw evdev input (§3, via `libinput`, §10.3.3) with no idea which window they're meant for — the compositor decides which client currently has focus and forwards each event there.]),
+)
+
+A *window manager*, in the older X11 sense — deciding where windows are
+placed, sized, and stacked — is usually just another responsibility the
+same compositor process takes on directly in a Wayland system, rather
+than a cooperating second program the way X11 traditionally split it.
+`cosmic-comp` (§10.3.6) is COSMIC's own compositor; `Weston` (§10.3.5)
+is the reference compositor this workspace verified the graphics stack
+against first, before `cosmic-comp` existed as a buildpack.
+
 Getting from "a kernel that can talk to a GPU" to "a compositor rendering
 a client's window on an actual display" passes through several distinct
 layers, each solving a different part of the problem:
@@ -923,10 +946,9 @@ final step.
   ([`boot-logo`], [Framebuffer console + boot-time logo (stock penguin, or a custom 80×80 PPM via `kernel.logo_file`).]),
 )
 
-`distro.toml` currently sets no `kernel.features` at all — the kernel
-ships the fully stripped `defconfig` baseline plus whatever `graphics`
-support the rootfs actually needs is enabled directly, not via a named
-pack.
+`distro.toml` currently sets `kernel.features = ["graphics"]` — the one
+pack the graphics stack (§6, §10.3.4) actually needs — with every other
+pack left off the fully stripped `defconfig` baseline.
 
 == Packages
 
@@ -1022,7 +1044,7 @@ kernel needs. Nothing in `libdrm`/Mesa's own build depends on which GPU
 driver ends up underneath at runtime — that binding happens at boot,
 when the kernel probes for a matching device and the driver it finds
 (virtio-gpu, here, since that's what QEMU presents) is whatever DRI then
-loads a Gallium driver against (§6.3).
+loads a Gallium driver against (§6.4).
 
 === Hosting a compositor: the Weston chain
 
@@ -1052,6 +1074,57 @@ layout data package:
   actually rendering via virtio-gpu inside QEMU. Not yet automatic at
   boot: today Weston is started by hand from a login shell, not a
   `distro-init` service.
+]
+
+=== cosmic-comp: COSMIC's own compositor
+
+COSMIC (`pop-os/cosmic-epoch`) is 28 real components (§11); `cosmic-comp`
+— the compositor itself, built on `smithay` — is the first one, and
+everything else in a minimal session depends on it existing first. It
+needs no C library buildpacks beyond what Weston's own chain already
+built: `smithay`'s feature set links against `libseat`, `libinput`,
+`libdrm`+`gbm`, `libudev`, and `libxkbcommon`, all of which this sysroot
+already provides — D-Bus access goes through `zbus`, a pure-Rust
+implementation of the wire protocol, not a `libdbus` binding, so it adds
+no C dependency either.
+
+One real upstream issue, found and patched: `cosmic-comp`'s own
+`Cargo.toml` names a `[patch]` replacement source with a doubled slash
+(`https://github.com/pop-os//cosmic-protocols`) — a typo that happens to
+matter, not a no-op, since Cargo's git-source deduplication treats it as
+a *different* string from the correctly-spelled main dependency, letting
+the patch silently win. Fixing the typo makes Cargo correctly reject the
+patch as redundant instead (same source, two different refs) — so the
+buildpack's patch fixes the typo *and* removes the now-redundant `[patch]`
+block, retargeting the main dependency to the `branch = "main"` ref the
+patch (and the project's own committed `Cargo.lock`) already resolved to.
+
+#callout(kind: "ok", "Verified")[
+  A full `cargo build --release` succeeds against this workspace's real
+  sysroot (no new C library buildpacks needed), and `readelf -d` on the
+  resulting binary shows ten direct `NEEDED` entries — `libdisplay-info`,
+  `libgbm`, `libseat`, `libudev`, `libinput`, `libpixman-1`,
+  `libxkbcommon`, `libgcc_s`, `libm`, `libc` — every one of which
+  resolves cleanly against the sysroot with zero "not found" entries.
+  `distro build-userland`'s real topological sort places it correctly
+  among its dependencies, and `assemble-rootfs` installs it to
+  `/usr/bin/cosmic-comp`. Not yet verified: actually running it — no
+  launch mechanism (a `cosmic.desktop` session entry, a hand-written
+  config, or a `distro-init` service) exists yet, the same gap Weston
+  itself had before its own real-boot milestone above was reached.
+]
+
+#callout(kind: "trap", "Vulkan is a known, deliberate gap here")[
+  `smithay`'s `backend_vulkan` feature compiles in cleanly — the `ash`
+  crate needs no Vulkan SDK at build time — but this workspace's own
+  Mesa build has Vulkan drivers disabled entirely
+  (`-Dvulkan-drivers=`, empty, §10.3.4). `cosmic-comp` should fall back
+  to `renderer_glow` (GL via EGL, which this Mesa build does provide) at
+  runtime the same way Weston falls back to `softpipe` — not yet
+  confirmed with a real boot. Re-enabling a Vulkan driver in Mesa (most
+  likely `lavapipe`, the software Vulkan implementation, or `virtio`'s
+  own Vulkan passthrough) is tracked as real future work, not assumed
+  unnecessary.
 ]
 
 == The sysroot: how these packages find each other
@@ -1220,7 +1293,7 @@ the project's own submodule list, not estimated:
 #dtable(
   columns: (auto, 1fr),
   ([Group], [Components]),
-  ([Minimal session (\~14)], [`cosmic-comp` (compositor), `cosmic-session` (launches/supervises the rest), `cosmic-panel`, `cosmic-bg`, `cosmic-applibrary`, `cosmic-launcher` + `pop-launcher` (its search backend), `cosmic-notifications`, `cosmic-osd`, `cosmic-settings-daemon`, `cosmic-idle`, `cosmic-randr`, `xdg-desktop-portal-cosmic`, `cosmic-icons`, `cosmic-term` — enough to log in (at a TTY; `cosmic-greeter` is skippable here), see a panel, and use a terminal.]),
+  ([Minimal session (\~14)], [`cosmic-comp` (compositor — #strong[built, §10.3.6]), `cosmic-session` (launches/supervises the rest), `cosmic-panel`, `cosmic-bg`, `cosmic-applibrary`, `cosmic-launcher` + `pop-launcher` (its search backend), `cosmic-notifications`, `cosmic-osd`, `cosmic-settings-daemon`, `cosmic-idle`, `cosmic-randr`, `xdg-desktop-portal-cosmic`, `cosmic-icons`, `cosmic-term` — enough to log in (at a TTY; `cosmic-greeter` is skippable here), see a panel, and use a terminal.]),
   ([Everything else (\~14)], [`cosmic-greeter`, `cosmic-settings`, `cosmic-files`, `cosmic-edit`, `cosmic-store`, `cosmic-applets`, `cosmic-workspaces-epoch`, `cosmic-monitor`, `cosmic-screenshot`, `cosmic-theme-editor`, `cosmic-initial-setup`, `cosmic-sound-theme`, `cosmic-wallpapers` — real, but not load-bearing for "usable."]),
 )
 

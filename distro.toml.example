@@ -110,6 +110,10 @@ url = "https://xorg.freedesktop.org/archive/individual/data/xkeyboard-config/xke
 version = "16.0.0"
 url = "https://gitlab.freedesktop.org/wayland/weston/-/archive/16.0.0/weston-16.0.0.tar.gz"
 
+[cosmic_comp]
+git_url = "https://github.com/pop-os/cosmic-comp.git"
+git_rev = "a7349b72e39fd91d7ed25eddb2fa24b900a615d5"
+
 [image]
 arch = "x86_64"
 size_mb = 2048
