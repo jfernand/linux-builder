@@ -108,6 +108,21 @@ identifier from the filesystem UUID `search` just used: the kernel
 itself only understands `PARTUUID=` natively for locating its own root
 partition at boot, not the filesystem UUID GRUB found it by.
 
+== Telling where you actually booted from
+
+None of the above has to be taken on faith — a running system can be
+asked directly what booted it, from most to least specific:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Check], [What it tells you]),
+  ([`cat /proc/cmdline`], [The exact kernel command line GRUB set — including the literal `root=PARTUUID=...` (or `UUID=...`) value the kernel used to find its own root partition.]),
+  ([`findmnt /` or `cat /proc/mounts`], [The actual device node (`/dev/vda2`, say) the kernel resolved that identifier to and mounted — after resolution, not the identifier itself.]),
+  ([`dmesg | grep -i "mounted root"`], [The kernel's own boot-time log line recording which device and filesystem type it mounted as root — a permanent record of what happened, not just what was asked for.]),
+  ([`blkid`], [Cross-references a `PARTUUID`/`UUID` from `/proc/cmdline` against every real device on the system, useful for going the other direction — "which physical partition does this identifier actually name?"]),
+  ([`[ -d /sys/firmware/efi ]`], [Whether this boot went through UEFI at all — present only if it did, absent on a legacy BIOS boot. A different firmware path entirely (above), not just a detail of which partition was chosen.]),
+)
+
 == From a loaded image to a running kernel
 
 Handing off to the kernel isn't handing off to a fully capable OS yet —
@@ -723,7 +738,7 @@ Nothing glibc-based has a BusyBox-equivalent single init binary, and
 pulling in systemd would drag in `logind`, `udevd`, `journald`, and far
 more than this system currently needs. `distro-init` is a purpose-built
 init instead — about 100 lines of Rust using the `nix` crate — following
-exactly the "purpose-written init" pattern described in §2.4.
+exactly the "purpose-written init" pattern described in §2.5.
 
 #codepanel(title: "distro-init/src/main.rs — the whole supervision loop, abbreviated")[
 ```rust
@@ -887,18 +902,69 @@ Static-base packages (§10.3's first table) never need each other at
 build time — each just needs the host's gcc. Everything from the seat
 layer onward does: `wayland-protocols` needs `wayland-scanner` on `PATH`
 at its own build time, and `libinput` needs `eudev`'s installed
-`libudev.pc` to link against `libudev` at all. Every one of those
-packages is therefore built with `--prefix=/usr` (its normal, final,
-"as if genuinely installed" prefix) and installed with
-`DESTDIR=<sysroot>` — files physically land under a shared sysroot
-directory, but each package's own compiled-in idea of its prefix stays
-`/usr`, which matters: some of these daemons look up their own config
-files relative to whatever prefix they were *actually built with*, at
-their own runtime, on the real target. `PKG_CONFIG_SYSROOT_DIR`
-(pkg-config's own mechanism for exactly this case) rewrites the
-`-I`/`-L` paths a later package's build sees from `/usr/...` to the
-sysroot's real, on-disk `<sysroot>/usr/...`. Assembling the rootfs then
-copies that whole sysroot tree in with one `cp -a`.
+`libudev.pc` to link against `libudev` at all. Solving that — letting
+one from-source package's build see another already-built one, using
+the exact same mechanism real software expects a real system install to
+provide — is what the *sysroot* actually is.
+
+=== DESTDIR: staged installation, not a different install
+
+`./configure --prefix=/usr` (or meson's `--prefix=/usr`) doesn't just
+control where `make install` copies files to — it's compiled directly
+into the resulting binaries, since plenty of software looks up its own
+data files, plugins, or config at *runtime* relative to whatever prefix
+it believes it lives under. Actually installing to `/usr` while building
+would mean every package installs on top of the host's own real
+`/usr` — exactly what this project's whole premise rules out. `DESTDIR`
+is the standard convention (every autotools/meson project supports it,
+because real distribution packaging depends on it) for breaking that
+link: `make install DESTDIR=<sysroot>` still installs *as if* the
+package's prefix were `/usr`, but physically writes every file under
+`<sysroot>/usr/...` instead — the binary's own compiled-in idea of its
+prefix stays the real `/usr`, only the location `make install` actually
+wrote to changes. This is precisely how `.deb`/`.rpm` build pipelines
+stage a package's files before archiving them, reused here for the same
+reason: to get a package's files onto disk without overwriting the host.
+
+=== pkg-config: how one package's build finds another's
+
+Every one of these packages exposes what it provides to later builds via
+a `.pc` file — a plain text file recording its compiler/linker flags
+(`Cflags`, `Libs`) under whatever prefix it was configured with. A
+later package's build runs `pkg-config --cflags --libs libfoo` and gets
+back exactly those flags, with no need to know libfoo's install layout
+itself. Two environment variables make this work against a sysroot
+instead of a real system install: `PKG_CONFIG_PATH` points pkg-config at
+the sysroot's own `.pc` file directory instead of the host's, and
+`PKG_CONFIG_SYSROOT_DIR` rewrites the `-I`/`-L` paths those `.pc` files
+record — written as if `/usr/...` were real — into the sysroot's actual,
+on-disk `<sysroot>/usr/...`, since the `.pc` files themselves were
+generated assuming a real install, exactly per the `DESTDIR` convention
+above.
+
+=== wayland's one exception, on purpose
+
+One package in this chain is deliberately built *without* `DESTDIR` at
+all: `wayland` itself is configured with a real, absolute
+`--prefix=<sysroot>/usr` and installed directly. `wayland-scanner`'s own
+path is recorded in `wayland`'s `.pc` file as a *custom* pkg-config
+variable (`wayland_scanner=${bindir}/wayland-scanner`) — and unlike the
+ordinary `Cflags`/`Libs` fields, `PKG_CONFIG_SYSROOT_DIR` does not
+rewrite custom variables, because pkg-config has no way to know a given
+custom variable even represents a path. `wayland-protocols`' build reads
+that variable and runs whatever it names, literally, as part of its own
+build — with a plain `--prefix=/usr` and `DESTDIR`, that would resolve
+to `/usr/bin/wayland-scanner`, a path that exists nowhere on the actual
+build host. Building `wayland` against its own real, final sysroot path
+instead sidesteps the problem entirely: this is safe specifically
+*because* none of `wayland`'s own shared libraries do a prefix-derived
+runtime lookup the way some of these packages' daemons do — its `.so`s
+don't care what prefix they think they're under, only the one
+`wayland-scanner` invocation during a later package's build does.
+
+Assembling the rootfs copies this whole sysroot tree in with one
+`cp -a` — every package that built into it, regardless of which
+mechanism (`DESTDIR` or a real sysroot prefix) actually put it there.
 
 == Pipeline
 
