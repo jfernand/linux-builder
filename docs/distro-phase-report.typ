@@ -77,6 +77,76 @@ Steps 1–2 are identical on every Linux system. Steps 3 onward are where a
 distribution's own choices show up — how much init does directly, what it
 delegates to separate daemons, and what those daemons are.
 
+== Firmware and the bootloader: getting to step 1
+
+A bootloader doesn't run because the disk is bootable in some magical
+sense — the machine's own firmware is what decides to run it, and *how*
+differs by firmware type:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Firmware], [How it finds something to run]),
+  ([Legacy BIOS], [Reads the first 512-byte sector of the boot disk (the *MBR*) and executes it directly as code — that sector is normally just a small stub whose entire job is to load a larger second stage from elsewhere on disk, since 512 bytes isn't room for a real bootloader.]),
+  ([UEFI], [Reads a `FAT32`-formatted partition specifically marked as the *EFI System Partition* (ESP) and executes a `.efi` file from it directly — a real PE-format executable, not a boot-sector stub. Which `.efi` file to run is normally recorded in the firmware's own NVRAM as a named boot entry, *or* — if nothing is registered — UEFI falls back to a fixed, well-known path on the ESP: `\EFI\BOOT\BOOTX64.EFI`.]),
+)
+
+GRUB, install and all, is itself split the same way BIOS-era bootloaders
+were: a minimal loader the firmware hands off to, which then loads GRUB's
+*real* logic — including reading `grub.cfg` — from wherever it was
+actually installed. Installing it with `--removable` specifically targets
+UEFI's fallback path above rather than registering an NVRAM entry, so the
+resulting disk boots correctly on *any* UEFI firmware, unmodified NVRAM
+included — the same property that makes a "boot from USB" disk work on a
+machine that's never seen it before.
+
+`grub.cfg` itself does two things: `search --fs-uuid` locates a
+filesystem by its on-disk UUID and sets `$root` to wherever GRUB finds
+it (independent of `/dev/sdX`-style naming, which can differ between
+boots), and `linux` then loads the kernel image from that filesystem and
+sets its command line — critically, `root=PARTUUID=...`, a *different*
+identifier from the filesystem UUID `search` just used: the kernel
+itself only understands `PARTUUID=` natively for locating its own root
+partition at boot, not the filesystem UUID GRUB found it by.
+
+== From a loaded image to a running kernel
+
+Handing off to the kernel isn't handing off to a fully capable OS yet —
+the image GRUB loaded is compressed, and unpacks itself first via a
+small stub linked into the front of the file. Once running for real, the
+kernel walks the memory map the firmware handed it, brings up its own
+core subsystems (scheduler, memory management, the device model
+underlying §3), and probes for hardware, loading whatever drivers are
+built directly into this kernel image as it finds matching devices.
+
+Some systems need a userspace-driven step *before* any of this can even
+locate a real root filesystem — a RAID array to assemble, an
+encrypted volume to unlock, or a storage driver too specialized to be
+built into the kernel image itself, handled by a temporary *initramfs*:
+a small, self-contained root filesystem, embedded alongside the kernel
+image, whose only job is running just enough userspace to make the real
+root filesystem reachable before handing off to it and being discarded.
+A kernel built with every storage driver it needs compiled directly in
+— true for both `distro` and `distroless`, §9–10 — has no such gap to
+close, and mounts its real root filesystem directly, with no initramfs
+stage at all.
+
+== The pseudo-filesystems init mounts, and why
+
+None of `/proc`, `/sys`, `/dev`, or `/run` hold real files on disk —
+each is a *pseudo-filesystem*, generated live by the kernel (or, for
+`/dev`, populated live as described in §3) rather than read from a block
+device, and each has to be mounted explicitly by init before anything
+depending on it can work:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Mount], [What it actually is]),
+  ([`/proc`], [A live view of kernel and per-process state — one directory per running PID, plus kernel-wide tunables and statistics. Standard tools (`ps`, `top`, and plenty of libraries) read straight from here rather than through some other API.]),
+  ([`/sys`], [`sysfs` — the kernel's device/driver model, described in full in §3.1.]),
+  ([`/dev`], [`devtmpfs` — where device nodes actually live, populated as drivers bind to hardware, refined by udev's rules pass (§3).]),
+  ([`/run`], [An ordinary `tmpfs` — real files, but backed by RAM, not disk, and empty again on every boot. Where sockets, PID files, and other runtime-only state belong precisely *because* nothing should expect it to survive a reboot.]),
+)
+
 == What init actually does, and why it's never "nothing"
 
 PID 1 is not an implementation detail. The kernel will only ever execute
@@ -653,7 +723,7 @@ Nothing glibc-based has a BusyBox-equivalent single init binary, and
 pulling in systemd would drag in `logind`, `udevd`, `journald`, and far
 more than this system currently needs. `distro-init` is a purpose-built
 init instead — about 100 lines of Rust using the `nix` crate — following
-exactly the "purpose-written init" pattern described in §2.1.
+exactly the "purpose-written init" pattern described in §2.4.
 
 #codepanel(title: "distro-init/src/main.rs — the whole supervision loop, abbreviated")[
 ```rust
