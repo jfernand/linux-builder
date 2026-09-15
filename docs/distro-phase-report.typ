@@ -1033,7 +1033,7 @@ works without the right one already compiled in via `kernel.features`
   align: (left, left, left),
   ([Package], [Version], [What it's for]),
   ([libdrm], [2.4.134], [The kernel-userspace ioctl wrapper every GPU-facing library builds on — every vendor-specific sub-library disabled, virtio-gpu needs only the generic core.]),
-  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback), plus `lavapipe` (the software Vulkan ICD, §10.3.6.1), statically linked against LLVM so the target image carries no runtime `libLLVM.so` dependency. GLX/X11 stays disabled — Wayland/EGL/GLES/Vulkan only.]),
+  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback), plus `lavapipe` (the software Vulkan ICD, §10.3.6.2), statically linked against LLVM so the target image carries no runtime `libLLVM.so` dependency. GLX/X11 stays disabled — Wayland/EGL/GLES/Vulkan only.]),
 )
 
 The kernel driver itself — `virtio_gpu`, part of the `graphics` feature
@@ -1108,10 +1108,89 @@ patch (and the project's own committed `Cargo.lock`) already resolved to.
   resolves cleanly against the sysroot with zero "not found" entries.
   `distro build-userland`'s real topological sort places it correctly
   among its dependencies, and `assemble-rootfs` installs it to
-  `/usr/bin/cosmic-comp`. Not yet verified: actually running it — no
-  launch mechanism (a `cosmic.desktop` session entry, a hand-written
-  config, or a `distro-init` service) exists yet, the same gap Weston
-  itself had before its own real-boot milestone above was reached.
+  `/usr/bin/cosmic-comp`. It actually runs, too — see the `distro-init`
+  service below.
+]
+
+==== Actually running it: a `distro-init` service
+
+Building `cosmic-comp` and having something start it are two different
+milestones — Weston's own real-boot moment above needed the same
+distinction, and was started by hand from a login shell rather than
+automatically. `cosmic-comp` instead gets a real `distro-init` service,
+supervised the same way as `seatd`/`dbus-daemon`/`udevd`: forked, execed,
+and respawned if it ever exits.
+
+#flow("udevd/seatd/dbus/gettys start", "udevadm settle (bounded, 10s)", "mkdir + chmod 0700 XDG_RUNTIME_DIR", "fork+exec cosmic-comp", "supervised — respawn on exit")
+
+Two things distro-init has to get right that the other four services
+don't need:
+
+- *`XDG_RUNTIME_DIR` must exist first.* `wayland-server` refuses to
+  create its socket without it, and refuses a directory with the wrong
+  permissions — it has to be `0700`, owned by whoever's running the
+  compositor. `distro-init` creates `/run/user/0` (root, since nothing
+  in this image drops privileges yet) with exactly that mode before
+  ever forking `cosmic-comp`.
+- *Devices need to have actually appeared first.* `agetty`/`seatd`/
+  `dbus-daemon`/`udevd` itself don't touch `/dev/dri` or `/dev/input` at
+  their own startup, so they can all start immediately, racing udevd's
+  coldplug queue with no ill effect. `cosmic-comp`'s DRM/libinput
+  backend does — probing for a GPU it needs to have a device node for.
+  `distro-init` runs `udevadm settle --timeout=10` (bounded, so a stuck
+  queue can't hang boot forever) right before spawning it, the one place
+  in this whole init sequence something actually waits on udev.
+
+No VT-attachment dance was needed: `seatd`'s VT-bound seat (§4) assigns
+a connecting client whatever VT the kernel currently reports as
+*active* (`seat_add_client` in `seatd/seat.c`, read via an ioctl on
+`tty0`), not whatever terminal the requesting process happens to be
+attached to. Since nothing has switched consoles by the time
+`distro-init` forks `cosmic-comp`, that's VT1 — the same VT `agetty`'s
+own tty1 login prompt lives on, with no conflict, since `agetty` was
+never a `libseat` client to begin with.
+
+#callout(kind: "trap", "A real bug this surfaced: libtinfo.so.6")[
+  The first boot attempt crashed on start:
+  `Failed to load LibEGL: DlOpen { desc: "libtinfo.so.6: cannot open
+  shared object file" }`. Mesa's `lavapipe` Vulkan ICD (§10.3.6.2)
+  statically links the host's own LLVM, and that host LLVM build was
+  itself linked against `libtinfo` (terminal color-support detection) —
+  a genuinely new runtime dependency that `-Dllvm=enabled` introduced
+  but that nothing had actually exercised until `cosmic-comp` became the
+  first thing to `dlopen()` the DRI/EGL loading chain at runtime. Fixed
+  the same way this project already handles `libgcc_s`/`libstdc++`/
+  `libz`/`libzstd`/`libffi` (`distro/src/stages/rootfs.rs`'s
+  `HOST_DYNAMIC_LIBS`, §10.4) — `libtinfo.so.6` copied straight from the
+  host, since we compile natively against the host's own glibc anyway.
+]
+
+#callout(kind: "ok", "Verified — real boot, no crash loop")[
+  A scripted QEMU boot: `cosmic-comp` starts after the settle above,
+  connects to `seatd` (`seat.c` logs `Opened client 1 on seat0`),
+  initializes its DRM/KMS backend and EGL context, and opens a real
+  Wayland socket at `$XDG_RUNTIME_DIR/wayland-1`. Confirmed still
+  running and un-crashed ~40 seconds later by checking `/proc/<pid>/comm`
+  from a logged-in shell, with zero `distro-init: cosmic-comp exited,
+  respawning` messages anywhere in the boot log — the failure mode that
+  would show up immediately if it were crash-looping.
+]
+
+#callout(kind: "trap", "Still open: no client has ever connected")[
+  Running and un-crashed is not the same as rendering something anyone
+  would see. This boot's log shows several non-fatal warnings —
+  Xwayland failing to start (no X server exists in this image, matching
+  the Rust/C-only rule — see the callout at the end of §11), and both
+  the session and system D-Bus connections failing (no session bus is
+  running, and `cosmic-comp`'s system-bus lookup path doesn't match how
+  this image's `dbus-daemon` was started) — none of which stop the
+  compositor itself from coming up, but none of which are actually
+  fixed either. More importantly, nothing has connected to
+  `wayland-1` and asked it to render a frame — the same "not yet a
+  visible pixel" gap Weston closed with `weston-simple-egl`.
+  `cosmic-session` (the real launcher for the rest of COSMIC, §11) would
+  be the natural next client to try, once it exists as a buildpack of
+  its own.
 ]
 
 ==== A working Vulkan stack: driver, headers, and loader
@@ -1162,16 +1241,18 @@ having been autotools or meson.
 
 #callout(kind: "trap", "Still not confirmed: an application actually using it")[
   The loader finding the ICD manifest is not the same as `cosmic-comp`
-  successfully creating a `VkInstance` and rendering a frame through it
-  — that needs `cosmic-comp` actually running, which still has no launch
-  mechanism (§10.3.6's callout above). Deliberately, `vulkan_loader` was
-  *not* added to `cosmic_comp`'s own `dependencies()` list: this
-  project's `dependencies()` edges are build-order only, and `cosmic-comp`
-  never links against the loader at build time, only `dlopen()`s it at
-  runtime — so nothing in the dependency graph would catch a broken
-  runtime lookup. Confirming Vulkan actually works end-to-end is future
-  work, gated on the same missing launch mechanism as the rest of
-  `cosmic-comp`.
+  successfully creating a `VkInstance` and rendering a frame through it.
+  `cosmic-comp` does now actually run, as a real `distro-init` service
+  (§10.3.6.1 above) — but `smithay`'s renderer selection there picked
+  its GL/EGL path, not Vulkan (nothing in this boot's log mentions
+  `VkInstance` creation), and no client has connected to ask it to
+  render anything through either path yet (§10.3.6.1's last callout).
+  Deliberately, `vulkan_loader` was *not* added to `cosmic_comp`'s own
+  `dependencies()` list: this project's `dependencies()` edges are
+  build-order only, and `cosmic-comp` never links against the loader at
+  build time, only `dlopen()`s it at runtime — so nothing in the
+  dependency graph would catch a broken runtime lookup. Confirming
+  Vulkan actually gets exercised end-to-end is future work.
 ]
 
 == The sysroot: how these packages find each other

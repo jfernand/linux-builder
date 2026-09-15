@@ -17,7 +17,13 @@ use std::process::Command;
 /// wire-marshalling — the last of these was actually a latent Phase 2 gap
 /// (libwayland-client has needed it since it was first built), just never
 /// caught because nothing exercised it at runtime until Mesa's EGL now
-/// links against it too. Extend this list as later phases pull in more.
+/// links against it too. `libtinfo` is a fresh one from this same family:
+/// Mesa's `lavapipe` Vulkan ICD statically links the host's own LLVM,
+/// and that LLVM build was itself linked against `libtinfo` (terminal
+/// color-support detection) — a dependency that only became reachable
+/// once `-Dllvm=enabled` (added for Vulkan) actually got exercised at
+/// runtime, the same "latent until something actually loads it" pattern
+/// `libffi` hit above. Extend this list as later phases pull in more.
 const HOST_DYNAMIC_LIBS: &[&str] = &[
     "libc.so.6",
     "libexpat.so.1",
@@ -27,6 +33,7 @@ const HOST_DYNAMIC_LIBS: &[&str] = &[
     "libz.so.1",
     "libzstd.so.1",
     "libffi.so.8",
+    "libtinfo.so.6",
 ];
 const HOST_LIB_DIR: &str = "/lib/x86_64-linux-gnu";
 const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";
