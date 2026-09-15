@@ -81,6 +81,12 @@ pub enum AppEvent {
     Done(usize, bool),
 }
 
+/// One package's place in the userland build order.
+pub struct PackageProgress {
+    pub id: String,
+    pub done: bool,
+}
+
 pub struct App {
     pub config_path: PathBuf,
     pub cfg: DistroConfig,
@@ -229,6 +235,28 @@ impl App {
             }
         }
         changed
+    }
+
+    /// Per-package status for `BuildUserland`, in real build order —
+    /// `distro build-userland`/`distroless`'s equivalent process packages
+    /// strictly sequentially in this same topological order, one
+    /// `fetch()`+`build()` at a time, so "done" here means genuinely
+    /// already built (checked live via each buildpack's own
+    /// `is_built()` marker, not parsed out of log output — it can't
+    /// drift from what's actually on disk). Kernel is excluded: neither
+    /// distro's `build-userland` touches it, it has its own stage.
+    pub fn userland_progress(&self) -> Vec<PackageProgress> {
+        let Ok(packs) = self.reg.all_packages(&self.cfg) else { return Vec::new() };
+        let Ok(order) = buildpack_core::graph::topo_order(&packs) else { return Vec::new() };
+        order
+            .into_iter()
+            .filter_map(|i| packs.get(i))
+            .filter(|p| p.id() != "kernel")
+            .map(|p| {
+                let ctx = self.reg.ctx_for(p.id(), &self.cfg);
+                PackageProgress { id: p.id().to_string(), done: p.is_built(&ctx) }
+            })
+            .collect()
     }
 
     pub fn open_device_picker(&mut self) {

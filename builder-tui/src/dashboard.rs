@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
-use crate::stage::STAGES;
+use crate::stage::{StageKind, STAGES};
 use std::io::stdout;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -306,11 +306,22 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 "  "
             };
+            // BuildUserland is one long-running subprocess building ~25
+            // packages one at a time — a bare "running" icon doesn't say
+            // whether it's 1 package in or 24, so it gets a live count
+            // from the same is_built() checks the log pane below uses.
+            let label = if *stage == StageKind::BuildUserland {
+                let progress = app.userland_progress();
+                let done = progress.iter().filter(|p| p.done).count();
+                format!("{} ({done}/{})", stage.label(), progress.len())
+            } else {
+                stage.label().to_string()
+            };
             let mut style = Style::default().fg(color);
             if i == app.selected {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            ListItem::new(Line::from(Span::styled(format!("{icon}{present}{}", stage.label()), style)))
+            ListItem::new(Line::from(Span::styled(format!("{icon}{present}{label}"), style)))
         })
         .collect();
 
@@ -320,13 +331,59 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_log_pane(f: &mut Frame, app: &App, area: Rect) {
+    if STAGES[app.selected] == StageKind::BuildUserland {
+        draw_userland_pane(f, app, area);
+    } else {
+        let title = format!("Log: {}", STAGES[app.selected].label());
+        draw_raw_log(f, app, area, &title);
+    }
+}
+
+/// BuildUserland's own pane: a package-by-package checklist on top (real
+/// build order, live `is_built()` status — see `App::userland_progress`),
+/// the same raw subprocess log below it so compiler errors/warnings for
+/// whichever package is currently building are still visible.
+fn draw_userland_pane(f: &mut Frame, app: &App, area: Rect) {
+    let progress = app.userland_progress();
+    let running = app.running == Some(app.selected);
+
+    let needed = progress.len() as u16 + 2;
+    let list_height = needed.min((area.height / 2).max(3));
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(list_height), Constraint::Min(0)])
+        .split(area);
+
+    let done_count = progress.iter().filter(|p| p.done).count();
+    let mut current_marked = false;
+    let items: Vec<ListItem> = progress
+        .iter()
+        .map(|p| {
+            let (icon, color) = if p.done {
+                ("OK ", Color::Green)
+            } else if running && !current_marked {
+                current_marked = true;
+                (".. ", Color::Yellow)
+            } else {
+                ("   ", Color::Gray)
+            };
+            ListItem::new(Line::from(Span::styled(format!("{icon}{}", p.id), Style::default().fg(color))))
+        })
+        .collect();
+    let title = format!("Packages ({done_count}/{})", progress.len());
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(list, chunks[0]);
+
+    draw_raw_log(f, app, chunks[1], "Build output");
+}
+
+fn draw_raw_log(f: &mut Frame, app: &App, area: Rect, title: &str) {
     let state = &app.stages[app.selected];
     let height = area.height.saturating_sub(2) as usize;
     let start = state.log.len().saturating_sub(height);
     let lines: Vec<Line> = state.log.iter().skip(start).map(|l| Line::from(l.as_str())).collect();
 
-    let title = format!("Log: {}", STAGES[app.selected].label());
-    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
+    let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title.to_string()));
     f.render_widget(paragraph, area);
 }
 
