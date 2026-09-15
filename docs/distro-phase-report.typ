@@ -104,23 +104,103 @@ read in full and reason about completely).
 
 = Device Management: udev
 
-The kernel's device drivers know about hardware the moment it's detected,
-but they don't manage `/dev` in any structured way themselves —
-`devtmpfs`, mounted early in boot, creates basic device nodes
-automatically as drivers load, and that's the extent of what it does on
-its own. *udev* is the userspace daemon that actually does the rest: it
-listens for the kernel's own hardware-change announcements (sent over a
-netlink socket whenever something is plugged in, unplugged, or otherwise
-changes state), and in response creates or removes the matching `/dev`
-entries, applies permissions and naming rules, and maintains a live,
-queryable database of what hardware currently exists.
+The kernel's device drivers know about hardware the moment it's
+detected, but "knowing about it" and "userspace can actually use it" are
+two different things. Getting from one to the other is a genuine
+pipeline, not a single step.
 
-Without something doing this job, nothing gets notified when a device
-appears after boot, and nothing can ask "what's connected right now" in a
-structured way — a real gap for anything beyond the most minimal system.
-`eudev` is a fork of `udev` that works without systemd (ordinary `udev`
-is a systemd subproject); it's one of the two device-management answers
-this workspace actually uses (§10, §11).
+== sysfs: the kernel's hardware model, as a filesystem
+
+Every device, bus, and driver the kernel currently knows about is
+represented internally as a *kobject*, and the whole tree of them is
+exposed to userspace as `sysfs`, mounted at `/sys`. This is metadata and
+control, not device access: a directory per device, files inside it for
+that device's attributes (`/sys/class/net/eth0/address`, say), and
+symlinks expressing the relationships between devices, drivers, and
+buses. Nothing in `/sys` is a device node you can `open()` and read
+bytes from — that's a separate, second thing, over in `/dev`.
+
+`devtmpfs`, mounted early in boot, is what actually populates `/dev`: as
+each driver binds to a device, the kernel itself creates the matching
+device node there (a special file recording a major/minor number pair,
+not real file content) with a kernel-chosen name and default,
+usually-too-permissive ownership. That's the entire extent of what the
+kernel does on its own — correct device nodes exist, with root-only or
+otherwise generic permissions, no stable naming beyond whatever order
+drivers happened to probe in, and no way for anything to ask "what's
+connected right now" after the fact.
+
+== uevents: how the kernel announces a change
+
+Every time a device is added, removed, or changes state, the kernel
+emits a *uevent* — a small message, broadcast over a dedicated netlink
+socket (`NETLINK_KOBJECT_UEVENT`), carrying `KEY=value` pairs:
+`ACTION=add`, the device's `/sys` path, its `SUBSYSTEM` (`input`,
+`block`, `drm`, …), major/minor numbers, and a monotonically increasing
+sequence number so ordering survives even if events are handled out of
+strict arrival order. `udevd` is a long-running process that does nothing
+but sit on that socket and react.
+
+== Rules: deciding what a device actually gets
+
+Reacting to a uevent means running it through *udev rules* — plain-text
+files (`/usr/lib/udev/rules.d/*.rules`, with `/etc/udev/rules.d`
+available to override them) matched top to bottom against that device's
+properties:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Directive], [What it matches or does]),
+  ([`SUBSYSTEM==`, `KERNEL==`], [Match against the uevent's own subsystem and kernel-assigned device name.]),
+  ([`ATTR{name}==`], [Match a `sysfs` attribute's value — a device's vendor/product ID, for instance.]),
+  ([`ENV{KEY}==`], [Match a property attached by an *earlier* rule or a previous pass — rule evaluation is cumulative, not one-shot.]),
+  ([`SYMLINK+=`], [Add a stable, descriptive symlink to the node `devtmpfs` already created — `/dev/disk/by-id/...`, `/dev/input/by-path/...` — so nothing has to hardcode a `sdX`/`eventN` name that can change between boots.]),
+  ([`MODE=`, `OWNER=`, `GROUP=`], [Fix up the permissions `devtmpfs`'s default was never going to get right for every device class.]),
+  ([`TAG+=`], [Attach a label other tools query for later — `seatd`/`libinput` (§5) both rely on devices being tagged consistently to recognize what they are.]),
+  ([`RUN+=`], [Run an external program as part of handling this event.]),
+)
+
+`udevd` forks a worker process per device to evaluate its rules — in
+parallel across independent devices, but serialized for any one device
+so a rename can't race a later rule that depends on the new name. Since
+`devtmpfs` already created the node, most of what a rule does is refine
+it: rename or symlink it, correct its permissions, tag it — actual
+`mknod` only falls to udev itself on a system with no `devtmpfs` at all.
+
+== Coldplug vs. hotplug
+
+A uevent is a live, one-time broadcast — anything not yet listening when
+it fires simply never sees it. That's exactly the situation at boot:
+`devtmpfs` creates nodes for every device already present *before*
+`udevd` itself has started, so none of them ever produced a uevent
+`udevd` was around to catch. *Coldplug* is the fix: `udevadm trigger`
+walks the current `/sys` tree and synthesizes a uevent for every device
+already there, run through the exact same rules as a live hotplug event.
+Skipping this step boots to a system where `/dev` nodes exist (courtesy
+of `devtmpfs`) but none of them have been renamed, symlinked, permission-
+corrected, or tagged — which is why `distro-init` (§9.1) runs
+`udevadm trigger` once, immediately after starting `udevd`.
+
+== The device database
+
+Beyond the rules pass, `udevd` maintains a live database under
+`/run/udev/data/`, one entry per device, holding everything a rules pass
+determined about it — its tags, its properties, its stable names. This
+is what `udevadm info --query=all --name=<path>` actually reads, and
+what lets other components ask "what kind of device is this" without
+re-deriving it themselves; `libinput` (§5) and `seatd`'s own device
+filtering both depend on this database being populated and current, not
+just on the raw `/dev` node existing.
+
+Without something doing this whole job — sysfs walk, uevent listener,
+rules engine, database — a system boots to device nodes with no stable
+names, no correct permissions beyond whatever `devtmpfs` guessed, and no
+way to notice a device that appears after boot at all. `udev` is the
+canonical implementation; `eudev` is a fork that does the same job
+without depending on systemd (ordinary `udev` is a systemd subproject
+today) — the same rule syntax, the same netlink/`sysfs`/database
+mechanics, just packaged to build and run standalone. It's the device-
+management answer this workspace actually uses (§10, §11).
 
 = Seat & Session Management
 
