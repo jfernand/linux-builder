@@ -94,7 +94,7 @@ real systems:
   ([Approach], [What it looks like]),
   ([systemd], [The default on most desktop distributions. Starts and supervises services in dependency order, described declaratively as "unit" files, alongside a large family of companion daemons (`logind` for sessions, `udevd` for devices, `journald` for logging, `networkd`, and more) that a full systemd-based system typically runs together.]),
   ([A small built-in init], [BusyBox ships one: reads a short, static `/etc/inittab`, starts and respawns exactly the processes it names. No dependency graph, no unit files — just a fixed list.]),
-  ([A purpose-written init], [Nothing says init has to be either of the above. A minimal init can be a short, direct program: mount what's needed, fork a fixed set of children, wait for any of them to exit, fork it again. §9's `distro-init` is exactly this — about 100 lines.]),
+  ([A purpose-written init], [Nothing says init has to be either of the above. A minimal init can be a short, direct program: mount what's needed, fork a fixed set of children, wait for any of them to exit, fork it again. §10.1.1's `distro-init` is exactly this — about 100 lines.]),
 )
 
 None of these is "more correct" than the others — they're different
@@ -156,7 +156,7 @@ properties:
   ([`ENV{KEY}==`], [Match a property attached by an *earlier* rule or a previous pass — rule evaluation is cumulative, not one-shot.]),
   ([`SYMLINK+=`], [Add a stable, descriptive symlink to the node `devtmpfs` already created — `/dev/disk/by-id/...`, `/dev/input/by-path/...` — so nothing has to hardcode a `sdX`/`eventN` name that can change between boots.]),
   ([`MODE=`, `OWNER=`, `GROUP=`], [Fix up the permissions `devtmpfs`'s default was never going to get right for every device class.]),
-  ([`TAG+=`], [Attach a label other tools query for later — `seatd`/`libinput` (§5) both rely on devices being tagged consistently to recognize what they are.]),
+  ([`TAG+=`], [Attach a label other tools query for later — `seatd` (§4) and `libinput` (§10.3) both rely on devices being tagged consistently to recognize what they are.]),
   ([`RUN+=`], [Run an external program as part of handling this event.]),
 )
 
@@ -178,7 +178,7 @@ walks the current `/sys` tree and synthesizes a uevent for every device
 already there, run through the exact same rules as a live hotplug event.
 Skipping this step boots to a system where `/dev` nodes exist (courtesy
 of `devtmpfs`) but none of them have been renamed, symlinked, permission-
-corrected, or tagged — which is why `distro-init` (§9.1) runs
+corrected, or tagged — which is why `distro-init` (§10.1.1) runs
 `udevadm trigger` once, immediately after starting `udevd`.
 
 == The device database
@@ -188,9 +188,9 @@ Beyond the rules pass, `udevd` maintains a live database under
 determined about it — its tags, its properties, its stable names. This
 is what `udevadm info --query=all --name=<path>` actually reads, and
 what lets other components ask "what kind of device is this" without
-re-deriving it themselves; `libinput` (§5) and `seatd`'s own device
-filtering both depend on this database being populated and current, not
-just on the raw `/dev` node existing.
+re-deriving it themselves; `libinput` (§10.3) and `seatd`'s own device
+filtering (§4) both depend on this database being populated and current,
+not just on the raw `/dev` node existing.
 
 Without something doing this whole job — sysfs walk, uevent listener,
 rules engine, database — a system boots to device nodes with no stable
@@ -200,19 +200,76 @@ canonical implementation; `eudev` is a fork that does the same job
 without depending on systemd (ordinary `udev` is a systemd subproject
 today) — the same rule syntax, the same netlink/`sysfs`/database
 mechanics, just packaged to build and run standalone. It's the device-
-management answer this workspace actually uses (§10, §11).
+management answer this workspace actually uses (§9, §10).
 
 = Seat & Session Management
 
 A Wayland compositor needs exclusive, arbitrated access to raw input
 devices (`/dev/input/*`) and the GPU (`/dev/dri/*`) — but running it as
-root just to get that access is the wrong trade-off. *Seat management* is
-the piece that solves this: a daemon holds those device files open on
-behalf of whichever process currently "owns" the seat, and hands out
-access over a socket instead. `systemd-logind` is the answer most
-desktop distributions use; `seatd` is a smaller, systemd-independent
-daemon that does the same one job and nothing else — its own
-documentation describes it as depending only on libc.
+root just to get that access is the wrong trade-off, and letting an
+unprivileged process `open()` those nodes directly hits real permission
+walls even if it wanted to. *Seat management* is the piece that solves
+this — and it turns out to bundle together several related problems, not
+just one.
+
+== What a "seat" and a "session" actually are
+
+A *seat* is a bundle of hardware usable by one person at a time — at
+minimum a display, a keyboard, a pointer. Most machines have exactly one
+seat; a *multi-seat* system has several independent bundles (separate
+GPUs, separate input devices) so more than one person can use the same
+physical machine simultaneously, each with their own login. A *session*
+is the lifetime of one logged-in user's occupancy of a seat — tracked as
+its own thing (not just "a process is running") because a seat's devices
+need to change hands cleanly: when a session stops being the
+foreground one, whatever was using its keyboard/GPU access needs to
+actually lose that access, not just keep holding a file descriptor open
+against a display no one can see.
+
+== Why this needs a broker at all
+
+Two problems, not one, have to be solved before a compositor can safely
+touch `/dev/input/*` and `/dev/dri/*` as an ordinary user:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Problem], [What has to happen]),
+  ([Permission], [`/dev/input/*` and `/dev/dri/*` are root- or group-restricted by default (§3's `udev` rules decide exactly how). An unprivileged compositor process has no path to opening them directly.]),
+  ([Arbitration], [Switching virtual terminals (`Ctrl`+`Alt`+`F2`, say) has to *revoke* the outgoing session's device access and hand it to the incoming one — two compositors racing for the same GPU is a crash, not a feature. The kernel's own VT subsystem signals this switch; something has to react to it and actually pause/resume the affected session's access.]),
+)
+
+A seat daemon solves both at once: it holds the real, privileged file
+descriptors open itself, and hands duplicated, access-controlled
+descriptors to whichever session currently owns the seat over a small
+IPC protocol — reacting to VT-switch signals by revoking and reassigning
+them, so a compositor never has to implement VT arbitration itself, and
+never needs elevated privileges to begin with.
+
+== Three implementations, and an abstraction layer over them
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Implementation], [What it actually is]),
+  ([`systemd-logind`], [Part of systemd proper. Exposes session/seat state over a D-Bus API (`org.freedesktop.login1`) that a lot of desktop software — not just compositors — queries directly: polkit's authentication prompts, GNOME/KDE's own session management, suspend/inhibit locks all go through it. The default on most desktop distributions specifically because that D-Bus API is a de facto standard other software already expects.]),
+  ([`elogind`], [A standalone extraction of `logind` — the same `org.freedesktop.login1` D-Bus API, the same session/seat/VT-switch behavior, packaged to build and run without the rest of systemd. Exists specifically so non-systemd distributions can still run desktop software that was written assuming `logind`'s D-Bus interface exists.]),
+  ([`seatd`], [A smaller, purpose-built daemon: no D-Bus, no session-management API beyond the one job — a minimal socket protocol for "give me this device" / "you no longer have this device." Its own documentation describes it as depending only on libc. This workspace's choice (§9, §10), made explicitly to avoid pulling in `logind`, full `udev`, `journald`, and `networkd` for one seat-management socket.]),
+)
+
+Compositors that want to support more than one of these without three
+separate code paths link against `libseat` instead of any daemon's
+protocol directly — a small client library with backends for both
+`seatd` and `logind`/`elogind`'s D-Bus API, so the same compositor binary
+works against whichever is actually running on a given system. Weston
+(§10) is built this way.
+
+#callout(kind: "info", "seatd instead of systemd-logind — an open question, not a closed one")[
+  Choosing `seatd` was deliberate, to avoid the rest of what a full
+  systemd install brings in — but `seatd` alone provides none of
+  `logind`'s D-Bus session-management API, only device arbitration.
+  Whether that's sufficient once a real desktop session (COSMIC, §11)
+  needs the broader session-management surface polkit and friends expect
+  is still an open question this system hasn't had to answer yet.
+]
 
 = Userland Basics: coreutils, One Way or Another
 
@@ -290,11 +347,11 @@ dynamic linker before the program will run at all.
   columns: (auto, 1fr),
   ([Crate], [Role]),
   ([#cd[buildpack-core]], [Foundational library: the `Buildpack` trait every package implements, `DistroConfig` (the shared config-file format), the `PipelineStage` trait for whole-image operations, and the dependency-graph/build helpers both distros use.]),
-  ([#cd[buildpacks]], [One implementation per upstream package — kernel, coreutils, every library in §10–11's tables — shared between whichever distro(s) actually use each one.]),
+  ([#cd[buildpacks]], [One implementation per upstream package — kernel, coreutils, every library in §9–10's tables — shared between whichever distro(s) actually use each one.]),
   ([#cd[builder-tui]], [A generic interactive terminal dashboard for running any stage of either distro's pipeline and writing the result to a USB stick.]),
-  ([#cd[distroless]], [musl + BusyBox + uutils — a small, minimal distro. §10.]),
-  ([#cd[distro]], [A from-scratch *glibc* system, native-compiled, aimed eventually at a COSMIC desktop. §11.]),
-  ([#cd[distro-init]], [A from-scratch PID 1 written for this project, \~100 lines of Rust — used by `distro` (§11.1).]),
+  ([#cd[distroless]], [musl + BusyBox + uutils — a small, minimal distro. §9.]),
+  ([#cd[distro]], [A from-scratch *glibc* system, native-compiled, aimed eventually at a COSMIC desktop. §10.]),
+  ([#cd[distro-init]], [A from-scratch PID 1 written for this project, \~100 lines of Rust — used by `distro` (§10.1.1).]),
 )
 
 == The shared buildpack architecture
@@ -347,7 +404,7 @@ rather than the host's own glibc.
   align: (left, left, left),
   ([Package], [Provides], [Notes]),
   ([Linux kernel], [`vmlinuz`], [The same `Kernel` buildpack `distro` uses — kernel builds have no musl/glibc-specific behavior.]),
-  ([uutils/coreutils], [`ls`, `cat`, `cp`, …], [The musl variant of the same `Uutils` buildpack `distro` uses (§11.4) — one multi-call binary, statically linked, musl-static by default.]),
+  ([uutils/coreutils], [`ls`, `cat`, `cp`, …], [The musl variant of the same `Uutils` buildpack `distro` uses (§10.3) — one multi-call binary, statically linked, musl-static by default.]),
   ([BusyBox], [shell, init, `mount`, `getty`, and the rest of a minimal system toolbox], [Built via a curated Kconfig: `allnoconfig`, then a specific applet list enabled and cross-compiled against musl, statically linked.]),
 )
 
@@ -418,7 +475,7 @@ Nothing glibc-based has a BusyBox-equivalent single init binary, and
 pulling in systemd would drag in `logind`, `udevd`, `journald`, and far
 more than this system currently needs. `distro-init` is a purpose-built
 init instead — about 100 lines of Rust using the `nix` crate — following
-exactly the "purpose-written init" pattern described in §3.1.
+exactly the "purpose-written init" pattern described in §2.1.
 
 #codepanel(title: "distro-init/src/main.rs — the whole supervision loop, abbreviated")[
 ```rust
@@ -578,7 +635,7 @@ layout data package:
 
 == The sysroot: how these packages find each other
 
-Static-base packages (§11.4's first table) never need each other at
+Static-base packages (§10.3's first table) never need each other at
 build time — each just needs the host's gcc. Everything from the seat
 layer onward does: `wayland-protocols` needs `wayland-scanner` on `PATH`
 at its own build time, and `libinput` needs `eudev`'s installed
@@ -613,7 +670,7 @@ distro all                      # the whole pipeline, in order
 ]
 
 `build-userland` fetches and builds every non-kernel package in
-dependency order (§9.1's topological sort); `assemble-rootfs` then
+dependency order (§8.1's topological sort); `assemble-rootfs` then
 copies every statically-linked package's declared outputs in directly
 (coreutils and its applet symlinks, bash + `bin/sh`, util-linux's
 `agetty`/`mount`/`umount`, shadow's `login`/`passwd`, `distro-init` as
