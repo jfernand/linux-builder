@@ -1209,9 +1209,24 @@ packages need, plus the dynamic linker itself and `/etc/passwd` +
 
 #spec(
   ("Next", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …) — no new architecture needed, each is just another buildpack.]),
-  ("Then", [COSMIC itself — `cosmic-comp`, `cosmic-session`, `cosmic-panel`, `cosmic-greeter`, minimal subset first.]),
-  ("Later", [More COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
+  ("Then", [COSMIC itself, minimal subset first — see the real component breakdown below.]),
+  ("Later", [The remaining COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
 )
+
+COSMIC (`pop-os/cosmic-epoch`) is 28 real components, not the four-package
+sketch an earlier draft of this section guessed at — pulled directly from
+the project's own submodule list, not estimated:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Group], [Components]),
+  ([Minimal session (\~14)], [`cosmic-comp` (compositor), `cosmic-session` (launches/supervises the rest), `cosmic-panel`, `cosmic-bg`, `cosmic-applibrary`, `cosmic-launcher` + `pop-launcher` (its search backend), `cosmic-notifications`, `cosmic-osd`, `cosmic-settings-daemon`, `cosmic-idle`, `cosmic-randr`, `xdg-desktop-portal-cosmic`, `cosmic-icons`, `cosmic-term` — enough to log in (at a TTY; `cosmic-greeter` is skippable here), see a panel, and use a terminal.]),
+  ([Everything else (\~14)], [`cosmic-greeter`, `cosmic-settings`, `cosmic-files`, `cosmic-edit`, `cosmic-store`, `cosmic-applets`, `cosmic-workspaces-epoch`, `cosmic-monitor`, `cosmic-screenshot`, `cosmic-theme-editor`, `cosmic-initial-setup`, `cosmic-sound-theme`, `cosmic-wallpapers` — real, but not load-bearing for "usable."]),
+)
+
+Five more — `libcosmic`, `cosmic-protocols`, `cosmic-text`, `cosmic-theme`,
+`cosmic-time` — are Rust library crates these components pull in via
+Cargo, not separate buildpacks of their own.
 
 #callout(kind: "note", "A standing rule for everything above")[
   Anything that ends up *in* the built image — a buildpack's runtime
