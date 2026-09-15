@@ -889,6 +889,79 @@ fixed literal.
   above for the case that prompted trying it.
 ]
 
+== Finishing the roadmap: one config, one pipeline trait, one TUI
+
+The buildpack migration's own follow-up list named five remaining items.
+All five are done, in dependency order, each verified with a real QEMU
+boot before moving to the next:
+
++ *A shared `DistroConfig`.* `distro/src/config.rs` used to hand-declare
+  \~15 config structs (`BashConfig`, `UtilLinuxConfig`, `MesaConfig`, …) —
+  exact duplicates of shapes each buildpack already owned privately —
+  purely so its own `Config::load`/`save` could round-trip them.
+  `buildpack_core::config::DistroConfig` replaces it (and
+  `builder_core::config::Config`) with three typed fields (`build_dir`,
+  `networking`, `image`) plus `packages: BTreeMap<String, toml::Value>` —
+  every other TOML section kept raw and handed to that buildpack's own
+  `configure()`. A new `Buildpack::to_toml()`, the mirror of `configure`,
+  lets `DistroConfig::save` round-trip whatever changed a buildpack's
+  config (`resolve-kernel` writing a new version/url; the TUI's settings
+  screen toggling a kernel feature) without needing a whole-`Config`
+  round-trip through typed fields that no longer exist.
++ *A `PipelineStage` trait* (`buildpack_core::pipeline`) for the three
+  operations that act on the whole assembled distro rather than any one
+  package — `make-image`, `test-qemu`, `write-usb` — ported unchanged
+  from `builder-core`. Toolchain setup turned out *not* to be shared
+  logic (native apt gcc/meson/ninja for `distro` vs. musl-tools+rustup
+  for `distroless`), so it stayed a distro-specific function in each
+  `main.rs` rather than becoming a fourth `PipelineStage`; assembling the
+  rootfs stayed distro-specific for the same reason (genuinely different
+  init systems).
++ *`builder-core` retired entirely.* Everything it held was already
+  superseded — `fetch`/`userland`/`rootfs` by the buildpack cutover,
+  `kernel`'s build logic by `buildpacks::kernel`, `image`/`qemu`/`usb` by
+  `PipelineStage`. The one real blocker was `distroless`'s TUI, still
+  reading `builder_core::config::Config` and
+  `builder_core::stages::{usb::Device, kernel::FEATURE_PACKS}` directly —
+  repointing those (kernel feature toggles now go through
+  `DistroConfig`'s untyped `packages["kernel"]` table) came first, then
+  the crate was deleted outright.
++ *`list-packages`/`fetch-pkg`/`build-pkg`/`clean-pkg`* CLI subcommands
+  on both distros — natural once a real `Vec<Box<dyn Buildpack>>`
+  registry existed, and the thing Phase 4/5 buildpacks (the Rust
+  toolchain, COSMIC components) will use to be built and debugged one at
+  a time as they're added.
++ *A generic TUI.* `distroless/src/tui/{app,mod,stage}.rs` lifted into
+  their own crate, `builder-tui`, almost unchanged — the re-exec/
+  event-loop/settings machinery was already distro-agnostic once both
+  distros shared `DistroConfig` and `buildpacks::kernel`. The one real
+  seam, each distro's own package set, is injected via a `Registry` trait
+  (`all_packages`/`ctx_for`/`kernel_buildpack`/`kernel_ctx`/
+  `pipeline_ctx`/`rootfs_ready_marker`) that `distro` and `distroless`
+  each implement as a thin delegation to their own `stages::buildpacks`/
+  `pipeline` module. Stage presence/clean for `Fetch`/`BuildKernel`/
+  `BuildUserland` now calls the real `Buildpack::is_built`/`clean`
+  through the `Registry`, instead of hand-computing marker paths against
+  a config shape that no longer exists — the actual generalization the
+  original plan asked for, not just a code move. `distro` gets a working
+  `Tui` command for the first time in the process (net-new capability).
+
+#callout(kind: "ok", "Verified")[
+  Every phase above got its own `cargo build --workspace` plus a real
+  QEMU boot (not just a compile check) before the next one started. The
+  final state: both distros' full `fetch`→`build-userland`→
+  `assemble-rootfs`→`make-image` pipelines report every package
+  "already exists" with zero rebuilds, both boot cleanly in QEMU, and
+  the new `distro tui`/`distroless tui` dashboards render correct
+  build-status markers and each distro's own hostname/networking/
+  kernel-feature settings.
+]
+
+With this done, Phase 4 (a Rust toolchain) and Phase 5 (COSMIC
+components, §9) need no new architecture — each is just another entry in
+`all_packages()`, built and iterated on via `build-pkg <id>` like
+anything else here.
+
 = What Isn't Part of the Picture Yet
 
 #spec(
