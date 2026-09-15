@@ -271,7 +271,7 @@ works against whichever is actually running on a given system. Weston
   is still an open question this system hasn't had to answer yet.
 ]
 
-= Userland Basics: coreutils, One Way or Another
+= Userland Basics: Coreutils, Shells, and Logging In
 
 Every Unix system needs a basic set of file and text commands — `ls`,
 `cat`, `cp`, `mv`, `rm`, and so on. "Coreutils" is the generic name for
@@ -289,6 +289,78 @@ answers to what actually provides it:
 Whichever is chosen, the shell and login program are separate concerns —
 coreutils gets you `ls` and `cp`, not a shell to type them into or a
 login prompt to authenticate at.
+
+== The multi-call binary technique
+
+BusyBox and uutils both work the same way: one compiled binary contains
+every applet's code, and a symlink exists for every command name it
+supports — `/bin/ls`, `/bin/cp`, and so on — all pointing at that one
+file. When the kernel `exec()`s a program reached through a symlink, it
+resolves the symlink to find the actual file to run, but still passes
+the *path used to invoke it* (`/bin/ls`, not the multi-call binary's own
+name) as `argv[0]`. The binary's own `main` reads that back, strips it
+down to a bare command name, looks it up in an internal dispatch table,
+and jumps straight into that applet's implementation — one process
+image, one `exec()`, no subprocess spawned to "really" run `ls`.
+
+This is why the applet name in `argv[0]` has to be trustworthy for
+dispatch to work at all. Ordinarily it is — but it's technically just a
+string the caller chose, not something the kernel guarantees matches
+reality, and at least one context on this system's own build host turned
+out to supply an empty value instead of the expected path, which a naive
+"trust `argv[0]`" dispatch would silently mishandle. Some tools defend
+against `argv[0]` spoofing entirely by cross-checking it against
+`AT_EXECFN`, an auxiliary value the kernel itself provides at process
+startup recording the path it actually resolved and executed — a second,
+kernel-sourced source of truth for what name a program was really
+invoked under, independent of whatever the caller claimed.
+
+== Shells: what actually happens after login
+
+A shell is not special from the kernel's point of view — it's an
+ordinary program, distinguished only by what it does: read a line of
+text, parse it into a command and its arguments, `fork()` a child
+process, `exec()` the named command inside that child, wait for it to
+finish, and repeat. Running *interactively* (prompting at a terminal) and
+running as a *script interpreter* (reading commands from a file, no
+prompt) are the same binary in two different modes, not two different
+programs.
+
+`sh` names the POSIX-standardized baseline shell language every Unix
+scripting relies on being available; `bash` is a strict superset of it
+— arrays, `[[ ]]` conditionals, command history, and more — and is
+commonly *also* what `/bin/sh` itself points at, making the extended
+dialect available under the POSIX name too (as opposed to systems that
+deliberately point `/bin/sh` at a smaller, POSIX-only implementation for
+scripts, keeping `bash` reserved for interactive login use). This system
+takes the former approach: `/bin/sh` is a plain symlink to `bash`.
+
+== Authentication: what `login` actually checks
+
+Two files, both keyed by username, hold everything `login` needs:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([File], [What it holds]),
+  ([`/etc/passwd`], [One line per account: username, a password placeholder, numeric UID/GID, a display name field, the account's home directory, and its login shell. World-readable by design — plenty of software needs to look up a username or resolve a UID to a home directory.]),
+  ([`/etc/shadow`], [The actual password data, split out specifically *because* `/etc/passwd` is world-readable: a salted password hash (or, notably, an empty field), and account-aging data — when the password was last changed, and its minimum/maximum age, warning period, and expiry. Readable only by root.]),
+)
+
+`login`'s job is simple to state: read a typed username, look it up in
+both files, and — if `/etc/shadow`'s password field for that account is
+empty — skip the password prompt entirely and let the login proceed
+unauthenticated (a deliberate no-password account, not a bug); otherwise
+hash whatever the user just typed using the same algorithm and salt
+recorded in that stored hash, and compare. Only on a match does it
+finish becoming that user's session: set the process's UID/GID to the
+account's, make itself the session leader and attach the controlling
+terminal, `chdir` to the account's home directory, and finally `exec()`
+the shell named in `/etc/passwd` — replacing itself entirely, not
+spawning it as a child. *PAM* (Pluggable Authentication Modules) is the
+layer many systems interpose here instead, so login can be extended with
+other authentication sources (fingerprint readers, LDAP, two-factor)
+without changing `login` itself — not used in this workspace; `login`
+here does the passwd/shadow check directly.
 
 = Graphics, Conceptually: From a Kernel Driver to a Frame on Screen
 
