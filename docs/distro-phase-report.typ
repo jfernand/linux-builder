@@ -1122,6 +1122,40 @@ runtime lookup the way some of these packages' daemons do — its `.so`s
 don't care what prefix they think they're under, only the one
 `wayland-scanner` invocation during a later package's build does.
 
+=== Dependency order: what has to build before what
+
+None of this — `DESTDIR`, `PKG_CONFIG_SYSROOT_DIR`, `wayland`'s own
+exception — works if a package builds before whatever it needs is
+already sitting in the sysroot. With around twenty packages needing each
+other in varying combinations, that order isn't hand-sequenced: each
+buildpack declares its own dependencies, and a real topological sort
+(§8.1) computes an order that satisfies every one of them, re-rendered
+to `dependency-graph.svg` on every build (§8.1) — what follows is a
+couple of representative edges out of that full graph, not the graph in
+full.
+
+Mesa is the deepest single node in it — it can't build until *six*
+other packages already have:
+
+#dtable(
+  columns: (auto, 1fr),
+  ([Package], [Depends on]),
+  ([Mesa], [`libdrm`, `wayland`, `libxkbcommon`, `pixman`, `libdisplay-info`, `libinput`]),
+  ([Weston], [`Mesa` (via `libdrm`/EGL), `libinput`, `wayland`, `wayland-protocols`, `libxkbcommon`, `cairo`, `xkeyboard-config`]),
+)
+
+One concrete path through the graph, start to finish — illustrative, not
+exhaustive; `libinput` alone also needs `libevdev`, omitted here to keep
+the chain readable:
+
+#flow("eudev", "libinput", "Mesa", "Weston")
+
+`eudev` has no sysroot dependencies of its own (§10.3.2 covers why it's
+needed at all — `libinput`'s hard `libudev` dependency), which is what
+lets it build first; everything downstream of it in this particular
+chain literally cannot start until `eudev`'s own `.pc` file exists in
+the sysroot for `PKG_CONFIG_SYSROOT_DIR` to find.
+
 Assembling the rootfs copies this whole sysroot tree in with one
 `cp -a` — every package that built into it, regardless of which
 mechanism (`DESTDIR` or a real sysroot prefix) actually put it there.
