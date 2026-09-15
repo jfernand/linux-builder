@@ -1088,6 +1088,15 @@ reason: to get a package's files onto disk without overwriting the host.
 
 === pkg-config: how one package's build finds another's
 
+`pkg-config` itself is not one of this distro's own from-source
+packages — like `gcc`, `meson`, `ninja`, and `gperf`, it's a host build
+tool `distro build-toolchain` installs via `apt-get`
+(`distro/src/stages/toolchain.rs`), the same "host compiler toolchain is
+infrastructure, not distro content" exception every from-scratch distro
+makes for the tools that do the actual compiling. What follows is how
+the packages *it operates on* — the ones this distro does build from
+source — use it to find each other.
+
 Every one of these packages exposes what it provides to later builds via
 a `.pc` file — a plain text file recording its compiler/linker flags
 (`Cflags`, `Libs`) under whatever prefix it was configured with. A
