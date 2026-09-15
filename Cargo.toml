@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["buildpack-core", "buildpacks", "distroless", "distro", "distro-init"]
+members = ["buildpack-core", "buildpacks", "builder-tui", "distroless", "distro", "distro-init"]
 
 [workspace.dependencies]
 anyhow = "1"

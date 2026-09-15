@@ -2,7 +2,6 @@ mod cli;
 mod pipeline;
 mod rootfs;
 mod stages;
-mod tui;
 
 use anyhow::{bail, Context, Result};
 use buildpack_core::config::DistroConfig;
@@ -37,7 +36,7 @@ fn main() -> Result<()> {
         Command::CleanPkg { id } => with_package(&cfg, &id, |p, ctx| p.clean(ctx)),
         Command::WriteUsb { device, yes } => write_usb(&cfg, &device, yes),
         Command::All => run_all(&cfg, cli.force),
-        Command::Tui => tui::run(cli.config.clone()),
+        Command::Tui => builder_tui::run(cli.config.clone(), Box::new(pipeline::DistrolessRegistry)),
     }
 }
 

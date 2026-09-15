@@ -1,8 +1,6 @@
-mod app;
-mod stage;
-
+use crate::app::{self, settings_rows, App, Screen, SettingsRow, Status};
+use crate::registry::Registry;
 use anyhow::Result;
-use app::{settings_rows, App, Screen, SettingsRow, Status};
 use buildpack_core::pipeline::Device;
 use buildpacks::kernel::FEATURE_PACKS;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -15,12 +13,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
-use stage::STAGES;
+use crate::stage::STAGES;
 use std::io::stdout;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub fn run(config_path: PathBuf) -> Result<()> {
+pub fn run(config_path: PathBuf, reg: Box<dyn Registry>) -> Result<()> {
     // Several stages need `sudo`. Spawned stages run with no stdin, so a
     // password prompt can't be answered from inside the dashboard; check
     // non-interactively up front (in the plain terminal) and, if that
@@ -37,7 +35,7 @@ pub fn run(config_path: PathBuf) -> Result<()> {
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let result = App::new(config_path).and_then(|mut app| event_loop(&mut terminal, &mut app));
+    let result = App::new(config_path, reg).and_then(|mut app| event_loop(&mut terminal, &mut app));
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -88,7 +86,7 @@ fn handle_key(app: &mut App, code: KeyCode) {
             KeyCode::Char('c') => {
                 if app.running.is_none() {
                     let kind = STAGES[app.selected];
-                    if kind.can_clean() && kind.is_present(&app.cfg) {
+                    if kind.can_clean() && kind.is_present(&app.cfg, app.reg.as_ref()) {
                         app.screen = Screen::ConfirmClean { idx: app.selected };
                     }
                 }
@@ -303,7 +301,7 @@ fn draw_stage_list(f: &mut Frame, app: &App, area: Rect) {
             };
             let present = if !stage.can_clean() {
                 "  "
-            } else if stage.is_present(&app.cfg) {
+            } else if stage.is_present(&app.cfg, app.reg.as_ref()) {
                 "* "
             } else {
                 "  "

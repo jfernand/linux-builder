@@ -1,4 +1,5 @@
-use super::stage::STAGES;
+use crate::registry::Registry;
+use crate::stage::STAGES;
 use anyhow::Result;
 use buildpack_core::config::DistroConfig;
 use buildpack_core::pipeline::Device;
@@ -62,6 +63,8 @@ pub enum SettingsRow {
 /// The Screen::Settings overlay's rows, in display/selection order. Built
 /// fresh each time (cheap: FEATURE_PACKS is tiny) rather than cached, so
 /// there's one source of truth for row order, indices, and row count.
+/// `FEATURE_PACKS`/kernel config are identical between distros (both use
+/// `buildpacks::kernel::Kernel`), so this needs no `Registry` involvement.
 pub fn settings_rows() -> Vec<SettingsRow> {
     let mut rows = vec![SettingsRow::Networking, SettingsRow::Hostname];
     for (i, pack) in FEATURE_PACKS.iter().enumerate() {
@@ -81,6 +84,7 @@ pub enum AppEvent {
 pub struct App {
     pub config_path: PathBuf,
     pub cfg: DistroConfig,
+    pub reg: Box<dyn Registry>,
     pub stages: Vec<StageState>,
     pub selected: usize,
     pub screen: Screen,
@@ -91,12 +95,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config_path: PathBuf) -> Result<Self> {
+    pub fn new(config_path: PathBuf, reg: Box<dyn Registry>) -> Result<Self> {
         let cfg = DistroConfig::load(&config_path)?;
         let (tx, rx) = mpsc::channel();
         Ok(App {
             config_path,
             cfg,
+            reg,
             stages: STAGES.iter().map(|_| StageState::default()).collect(),
             selected: 0,
             screen: Screen::Dashboard,
@@ -249,7 +254,7 @@ impl App {
         }
         let kind = STAGES[idx];
         self.stages[idx].log.clear();
-        match kind.clean(&self.cfg) {
+        match kind.clean(&self.cfg, self.reg.as_ref()) {
             Ok(()) => {
                 self.stages[idx].log.push_back("cleaned".to_string());
                 self.stages[idx].status = Status::Idle;

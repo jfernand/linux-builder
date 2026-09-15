@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 buildpack-core = { path = "../buildpack-core" }
 buildpacks = { path = "../buildpacks" }
+builder-tui = { path = "../builder-tui" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

@@ -142,3 +142,33 @@ pub fn install_static_outputs(cfg: &DistroConfig, root: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// `distroless`'s `builder_tui::Registry` impl — delegates straight back
+/// to this module's own functions.
+pub struct DistrolessRegistry;
+
+impl builder_tui::Registry for DistrolessRegistry {
+    fn all_packages(&self, cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
+        all_packages(cfg)
+    }
+
+    fn ctx_for(&self, id: &str, cfg: &DistroConfig) -> BuildCtx {
+        ctx_for(id, cfg)
+    }
+
+    fn kernel_buildpack(&self, cfg: &DistroConfig) -> Result<Kernel> {
+        kernel_buildpack(cfg)
+    }
+
+    fn kernel_ctx(&self, cfg: &DistroConfig) -> BuildCtx {
+        kernel_ctx(cfg)
+    }
+
+    fn pipeline_ctx(&self, cfg: &DistroConfig) -> Result<BuildCtx> {
+        pipeline_ctx(cfg)
+    }
+
+    fn rootfs_ready_marker(&self) -> &'static str {
+        "etc/inittab"
+    }
+}

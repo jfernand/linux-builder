@@ -140,6 +140,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "builder-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "buildpack-core",
+ "buildpacks",
+ "crossterm",
+ "ratatui",
+ "toml",
+]
+
+[[package]]
 name = "buildpack-core"
 version = "0.1.0"
 dependencies = [
@@ -414,6 +426,7 @@ name = "distro"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "builder-tui",
  "buildpack-core",
  "buildpacks",
  "clap",
@@ -433,11 +446,10 @@ name = "distroless"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "builder-tui",
  "buildpack-core",
  "buildpacks",
  "clap",
- "crossterm",
- "ratatui",
  "toml",
 ]
 

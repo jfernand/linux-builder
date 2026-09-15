@@ -1,4 +1,4 @@
-use crate::pipeline;
+use crate::registry::Registry;
 use anyhow::Result;
 use buildpack_core::config::DistroConfig;
 use buildpack_core::Buildpack;
@@ -44,8 +44,8 @@ impl StageKind {
         matches!(self, StageKind::WriteUsb)
     }
 
-    /// Args to pass to a re-exec'd `linux-builder` child process (after the
-    /// global `--config <path>` flag), running this stage non-interactively.
+    /// Args to pass to a re-exec'd distro binary (after the global
+    /// `--config <path>` flag), running this stage non-interactively.
     pub fn subcommand_args(&self, device: Option<&str>) -> Vec<String> {
         match self {
             StageKind::Fetch => vec!["fetch".into()],
@@ -74,31 +74,27 @@ impl StageKind {
 
     /// Whether every output this stage produces is already on disk.
     /// `Fetch`/`BuildKernel`/`BuildUserland` delegate to the real
-    /// `Buildpack::is_built` for each package involved; `AssembleRootfs`/
-    /// `MakeImage` check `DistroConfig`'s own path helpers directly (no
-    /// `Buildpack`/`PipelineStage` equivalent tracks a single marker for
-    /// them); `BuildToolchain`/`WriteUsb`/`TestQemu` have no persisted
-    /// state to check.
-    pub fn is_present(&self, cfg: &DistroConfig) -> bool {
+    /// `Buildpack::is_built` for each package involved (via the
+    /// `Registry`); `AssembleRootfs`/`MakeImage` check `DistroConfig`'s
+    /// own path helpers directly, since neither has a `Buildpack`/
+    /// `PipelineStage` of its own to delegate to;
+    /// `BuildToolchain`/`WriteUsb`/`TestQemu` have no persisted state.
+    pub fn is_present(&self, cfg: &DistroConfig, reg: &dyn Registry) -> bool {
         match self {
             StageKind::Fetch => {
-                pipeline::kernel_ctx(cfg).sources_dir.exists()
-                    && pipeline::ctx_for("uutils", cfg).sources_dir.exists()
-                    && pipeline::ctx_for("busybox", cfg).sources_dir.exists()
+                let Ok(packs) = reg.all_packages(cfg) else { return false };
+                !packs.is_empty() && packs.iter().all(|p| reg.ctx_for(p.id(), cfg).sources_dir.exists())
             }
             StageKind::BuildToolchain => false,
             StageKind::BuildKernel => {
-                let Ok(kernel) = pipeline::kernel_buildpack(cfg) else { return false };
-                kernel.is_built(&pipeline::kernel_ctx(cfg))
+                let Ok(kernel) = reg.kernel_buildpack(cfg) else { return false };
+                kernel.is_built(&reg.kernel_ctx(cfg))
             }
             StageKind::BuildUserland => {
-                let Ok(packs) = pipeline::all_packages(cfg) else { return false };
-                packs
-                    .iter()
-                    .filter(|p| p.id() != "kernel")
-                    .all(|p| p.is_built(&pipeline::ctx_for(p.id(), cfg)))
+                let Ok(packs) = reg.all_packages(cfg) else { return false };
+                packs.iter().filter(|p| p.id() != "kernel").all(|p| p.is_built(&reg.ctx_for(p.id(), cfg)))
             }
-            StageKind::AssembleRootfs => cfg.rootfs_dir().join("etc/inittab").exists(),
+            StageKind::AssembleRootfs => cfg.rootfs_dir().join(reg.rootfs_ready_marker()).exists(),
             StageKind::MakeImage => cfg.output_image().exists(),
             StageKind::WriteUsb | StageKind::TestQemu => false,
         }
@@ -106,25 +102,22 @@ impl StageKind {
 
     /// Remove this stage's outputs so it (and anything downstream that
     /// depends on it) will redo its work next run.
-    pub fn clean(&self, cfg: &DistroConfig) -> Result<()> {
+    pub fn clean(&self, cfg: &DistroConfig, reg: &dyn Registry) -> Result<()> {
         match self {
             StageKind::Fetch => {
-                for dir in [
-                    pipeline::kernel_ctx(cfg).sources_dir,
-                    pipeline::ctx_for("uutils", cfg).sources_dir,
-                    pipeline::ctx_for("busybox", cfg).sources_dir,
-                ] {
+                for pack in reg.all_packages(cfg)? {
+                    let dir = reg.ctx_for(pack.id(), cfg).sources_dir;
                     if dir.exists() {
                         std::fs::remove_dir_all(&dir)?;
                     }
                 }
             }
             StageKind::BuildKernel => {
-                pipeline::kernel_buildpack(cfg)?.clean(&pipeline::kernel_ctx(cfg))?;
+                reg.kernel_buildpack(cfg)?.clean(&reg.kernel_ctx(cfg))?;
             }
             StageKind::BuildUserland => {
-                for pack in pipeline::all_packages(cfg)?.iter().filter(|p| p.id() != "kernel") {
-                    pack.clean(&pipeline::ctx_for(pack.id(), cfg))?;
+                for pack in reg.all_packages(cfg)?.iter().filter(|p| p.id() != "kernel") {
+                    pack.clean(&reg.ctx_for(pack.id(), cfg))?;
                 }
             }
             StageKind::AssembleRootfs => {
