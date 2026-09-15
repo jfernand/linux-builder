@@ -1,6 +1,7 @@
 pub mod bash;
 pub mod busybox;
 pub mod cairo;
+pub mod cosmic_bg;
 pub mod cosmic_comp;
 pub mod dbus;
 pub mod distro_init;

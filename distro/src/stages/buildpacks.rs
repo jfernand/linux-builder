@@ -28,6 +28,7 @@ use buildpack_core::config::DistroConfig;
 use buildpack_core::{BuildCtx, Buildpack, InstallMode};
 use buildpacks::bash::Bash;
 use buildpacks::cairo::Cairo;
+use buildpacks::cosmic_bg::CosmicBg;
 use buildpacks::cosmic_comp::CosmicComp;
 use buildpacks::dbus::Dbus;
 use buildpacks::distro_init::DistroInit;
@@ -176,6 +177,7 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<VulkanHeaders>(cfg, "vulkan_headers")?),
         Box::new(configured::<VulkanLoader>(cfg, "vulkan_loader")?),
         Box::new(configured::<CosmicComp>(cfg, "cosmic_comp")?),
+        Box::new(configured::<CosmicBg>(cfg, "cosmic_bg")?),
         Box::new(DistroInit::new()),
     ])
 }

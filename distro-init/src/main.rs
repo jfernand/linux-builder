@@ -1,12 +1,13 @@
 //! `distro`'s own PID 1: mounts the basic virtual filesystems, starts
 //! udevd/seatd/dbus (Phase 2's device-management and seat/session
-//! plumbing), `cosmic-comp` (COSMIC's compositor, §10.3.6 of the phase
-//! report) once devices have settled, and supervises `agetty` on both
-//! the VGA console and the serial console — respawning any of the five
-//! services if it exits and reaping any other orphaned children.
-//! `agetty` execs `/bin/login` (shadow-utils) once a username is
-//! entered, which authenticates against `/etc/passwd`/`/etc/shadow` and
-//! execs the user's shell — this replaces Phase 1a's direct shell spawn.
+//! plumbing), `cosmic-comp` and `cosmic-bg` (COSMIC's compositor and
+//! background renderer, §10.3.6 of the phase report) once devices have
+//! settled, and supervises `agetty` on both the VGA console and the
+//! serial console — respawning any of the six services if it exits and
+//! reaping any other orphaned children. `agetty` execs `/bin/login`
+//! (shadow-utils) once a username is entered, which authenticates
+//! against `/etc/passwd`/`/etc/shadow` and execs the user's shell — this
+//! replaces Phase 1a's direct shell spawn.
 
 use nix::mount::{mount, MsFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -21,6 +22,7 @@ const DBUS_DAEMON: &str = "/usr/bin/dbus-daemon";
 const UDEVD: &str = "/usr/sbin/udevd";
 const UDEVADM: &str = "/usr/bin/udevadm";
 const COSMIC_COMP: &str = "/usr/bin/cosmic-comp";
+const COSMIC_BG: &str = "/usr/bin/cosmic-bg";
 const XDG_RUNTIME_DIR: &str = "/run/user/0";
 
 fn mount_basic_filesystems() {
@@ -106,6 +108,27 @@ fn spawn_cosmic_comp() -> Pid {
     spawn_env(COSMIC_COMP, &[COSMIC_COMP], &[("XDG_RUNTIME_DIR", XDG_RUNTIME_DIR), ("HOME", "/root")])
 }
 
+fn spawn_cosmic_bg() -> Pid {
+    // cosmic-comp never names its socket "wayland-0": smithay's
+    // ListeningSocketSource::new_auto() deliberately starts at 1 ("we
+    // don't try wayland-0 since clients may connect to the wrong
+    // compositor"), so a client that leaves WAYLAND_DISPLAY unset (which
+    // defaults to "wayland-0") never finds it. Hardcoding "wayland-1" is
+    // safe here since cosmic-comp is the only Wayland server this image
+    // ever runs — nothing else could take that name first.
+    //
+    // cosmic-comp's own Wayland socket may also not exist yet the first
+    // time this runs — cosmic-bg just fails fast (connect_to_env has no
+    // retry), and the respawn-on-exit loop below tries again, the same
+    // self-healing pattern every other service here already relies on
+    // rather than a hand-tuned startup delay.
+    spawn_env(
+        COSMIC_BG,
+        &[COSMIC_BG],
+        &[("XDG_RUNTIME_DIR", XDG_RUNTIME_DIR), ("HOME", "/root"), ("WAYLAND_DISPLAY", "wayland-1")],
+    )
+}
+
 /// devtmpfs already created device nodes before udevd started, but
 /// without notifying it — udevd only learns about *new* uevents over its
 /// netlink socket. `udevadm trigger` re-emits an "add" uevent for every
@@ -143,7 +166,8 @@ fn main() {
     // cosmic-comp's DRM/libinput probing against udevd's coldplug queue.
     settle_devices();
     let mut cosmic_comp_pid = spawn_cosmic_comp();
-    println!("distro-init: starting {COSMIC_COMP}");
+    let mut cosmic_bg_pid = spawn_cosmic_bg();
+    println!("distro-init: starting {COSMIC_COMP} and {COSMIC_BG}");
 
     loop {
         match waitpid(None, Some(WaitPidFlag::empty())) {
@@ -166,6 +190,9 @@ fn main() {
                 } else if pid == cosmic_comp_pid {
                     println!("distro-init: cosmic-comp exited, respawning");
                     cosmic_comp_pid = spawn_cosmic_comp();
+                } else if pid == cosmic_bg_pid {
+                    println!("distro-init: cosmic-bg exited, respawning");
+                    cosmic_bg_pid = spawn_cosmic_bg();
                 }
                 // Otherwise this was just reaping an orphaned child.
             }

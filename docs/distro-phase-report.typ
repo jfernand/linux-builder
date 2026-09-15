@@ -1033,7 +1033,7 @@ works without the right one already compiled in via `kernel.features`
   align: (left, left, left),
   ([Package], [Version], [What it's for]),
   ([libdrm], [2.4.134], [The kernel-userspace ioctl wrapper every GPU-facing library builds on — every vendor-specific sub-library disabled, virtio-gpu needs only the generic core.]),
-  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback), plus `lavapipe` (the software Vulkan ICD, §10.3.6.2), statically linked against LLVM so the target image carries no runtime `libLLVM.so` dependency. GLX/X11 stays disabled — Wayland/EGL/GLES/Vulkan only.]),
+  ([Mesa], [26.2.2], [`libEGL`, `libGLESv2`, `libgbm`, and the Gallium driver — built scoped to `virgl` (talks to QEMU's virtio-gpu/virgl backend) and `softpipe` (software fallback), plus `lavapipe` (the software Vulkan ICD, §10.3.6.3), statically linked against LLVM so the target image carries no runtime `libLLVM.so` dependency. GLX/X11 stays disabled — Wayland/EGL/GLES/Vulkan only.]),
 )
 
 The kernel driver itself — `virtio_gpu`, part of the `graphics` feature
@@ -1153,7 +1153,7 @@ never a `libseat` client to begin with.
 #callout(kind: "trap", "A real bug this surfaced: libtinfo.so.6")[
   The first boot attempt crashed on start:
   `Failed to load LibEGL: DlOpen { desc: "libtinfo.so.6: cannot open
-  shared object file" }`. Mesa's `lavapipe` Vulkan ICD (§10.3.6.2)
+  shared object file" }`. Mesa's `lavapipe` Vulkan ICD (§10.3.6.3)
   statically links the host's own LLVM, and that host LLVM build was
   itself linked against `libtinfo` (terminal color-support detection) —
   a genuinely new runtime dependency that `-Dllvm=enabled` introduced
@@ -1176,7 +1176,7 @@ never a `libseat` client to begin with.
   would show up immediately if it were crash-looping.
 ]
 
-#callout(kind: "trap", "Still open: no client has ever connected")[
+#callout(kind: "trap", "At this point: no client had ever connected")[
   Running and un-crashed is not the same as rendering something anyone
   would see. This boot's log shows several non-fatal warnings —
   Xwayland failing to start (no X server exists in this image, matching
@@ -1185,12 +1185,71 @@ never a `libseat` client to begin with.
   running, and `cosmic-comp`'s system-bus lookup path doesn't match how
   this image's `dbus-daemon` was started) — none of which stop the
   compositor itself from coming up, but none of which are actually
-  fixed either. More importantly, nothing has connected to
+  fixed either. What's closed below (§10.3.6.2) is the more important
+  gap this callout used to describe: nothing had connected to
   `wayland-1` and asked it to render a frame — the same "not yet a
   visible pixel" gap Weston closed with `weston-simple-egl`.
-  `cosmic-session` (the real launcher for the rest of COSMIC, §11) would
-  be the natural next client to try, once it exists as a buildpack of
-  its own.
+]
+
+==== cosmic-bg: the first real client
+
+`cosmic-bg` — COSMIC's background/wallpaper renderer — is the second
+real COSMIC component built here, and the first thing to actually
+connect to `cosmic-comp`'s socket and render something. It's a
+standalone Wayland client (a `wlr-layer-shell` background surface via
+`smithay-client-toolkit`), not part of `cosmic-session`'s own launch
+chain, so — like `cosmic-comp` before it — it needs no session
+orchestrator to exist first, just a compositor to connect to.
+
+#flow("cosmic-comp opens wayland-1", "cosmic-bg connects (WAYLAND_DISPLAY=wayland-1)", "layer-shell background surface", "solid color rendered")
+
+Two real gaps, found and fixed the same way every other gap in this
+report was — by actually trying to boot it, not by predicting them:
+
+#callout(kind: "trap", "Bug: wayland-0 doesn't exist, on purpose")[
+  `cosmic-bg` crash-looped on every boot with `Could not find wayland
+  compositor` — not a startup race, a hard failure, every single time.
+  The cause: smithay's `ListeningSocketSource::new_auto()` (what
+  `cosmic-comp` uses to open its socket, §10.3.6.1) deliberately skips
+  `wayland-0` — its own source comment reads "we don't try wayland-0
+  since clients may connect to the wrong compositor" — and starts
+  numbering at `wayland-1` instead. `cosmic-bg` left `WAYLAND_DISPLAY`
+  unset, which defaults to `wayland-0`, a socket that will never exist
+  in this image. Fixed by having `distro-init` set
+  `WAYLAND_DISPLAY=wayland-1` explicitly when spawning it — safe to
+  hardcode since `cosmic-comp` is the only Wayland server this image
+  ever runs, so nothing else could claim that name first.
+]
+
+#callout(kind: "trap", "Bug: the default wallpaper doesn't exist either")[
+  `cosmic-bg-config`'s fallback entry (used whenever no `cosmic-config`
+  state exists — every fresh boot of this image) points at
+  `/usr/share/backgrounds/cosmic/orion_nebula_nasa_heic0601a.jpg`, part
+  of the separate `cosmic-backgrounds` data package this project
+  doesn't build or ship. Left alone, `cosmic-bg` would find no file
+  there and quietly render nothing — a whole extra running service for
+  zero visible effect. The buildpack's one source patch changes the
+  fallback from `Source::Path` to `Source::Color`, a plain solid color,
+  so a fresh boot always has something real to show without needing any
+  wallpaper image asset at all — arguably a better default for a kiosk
+  than a stock nebula photo anyway.
+]
+
+#callout(kind: "ok", "Verified")[
+  A scripted QEMU boot: after one expected respawn (racing
+  `cosmic-comp`'s own socket creation, same self-healing pattern
+  `distro-init` already uses everywhere), `cosmic-bg` connects and stays
+  up — confirmed alongside `cosmic-comp` via `/proc/<pid>/comm`, with no
+  further `distro-init: cosmic-bg exited` messages afterward.
+  `readelf -d` shows only `libgcc_s`/`libm`/`libc` as `NEEDED` — even
+  smaller than `cosmic-comp`'s own footprint, since `wayland-client`
+  here is the pure-Rust `wayland-backend` crate talking directly to the
+  socket, no `libwayland-client.so` involved. Not independently
+  re-confirmed visually in *this* session (no screenshot taken) — a
+  QEMU window with just a compositor-drawn cursor and no client was
+  seen earlier in this same line of work, before `cosmic-bg` existed;
+  whether the solid color actually appears on screen now is expected,
+  not yet re-checked.
 ]
 
 ==== A working Vulkan stack: driver, headers, and loader
@@ -1421,7 +1480,7 @@ the project's own submodule list, not estimated:
 #dtable(
   columns: (auto, 1fr),
   ([Group], [Components]),
-  ([Minimal session (\~14)], [`cosmic-comp` (compositor — #strong[built, §10.3.6]), `cosmic-session` (launches/supervises the rest), `cosmic-panel`, `cosmic-bg`, `cosmic-applibrary`, `cosmic-launcher` + `pop-launcher` (its search backend), `cosmic-notifications`, `cosmic-osd`, `cosmic-settings-daemon`, `cosmic-idle`, `cosmic-randr`, `xdg-desktop-portal-cosmic`, `cosmic-icons`, `cosmic-term` — enough to log in (at a TTY; `cosmic-greeter` is skippable here), see a panel, and use a terminal.]),
+  ([Minimal session (\~14)], [`cosmic-comp` (compositor — #strong[built, §10.3.6]), `cosmic-bg` (background — #strong[built, §10.3.6.2]), `cosmic-session` (launches/supervises the rest), `cosmic-panel`, `cosmic-applibrary`, `cosmic-launcher` + `pop-launcher` (its search backend), `cosmic-notifications`, `cosmic-osd`, `cosmic-settings-daemon`, `cosmic-idle`, `cosmic-randr`, `xdg-desktop-portal-cosmic`, `cosmic-icons`, `cosmic-term` — enough to log in (at a TTY; `cosmic-greeter` is skippable here), see a panel, and use a terminal.]),
   ([Everything else (\~14)], [`cosmic-greeter`, `cosmic-settings`, `cosmic-files`, `cosmic-edit`, `cosmic-store`, `cosmic-applets`, `cosmic-workspaces-epoch`, `cosmic-monitor`, `cosmic-screenshot`, `cosmic-theme-editor`, `cosmic-initial-setup`, `cosmic-sound-theme`, `cosmic-wallpapers` — real, but not load-bearing for "usable."]),
 )
 
