@@ -1395,24 +1395,30 @@ Getting it running surfaced two more real gaps, in order:
   needed them, now both created by `assemble-rootfs`.
 ]
 
-#callout(kind: "trap", "Gap 2: winit's own event loop, still open")[
+#callout(kind: "trap", "Gap 2 (resolved): no /dev/pts, not winit at all")[
   With real fonts and real GPU acceleration both in place, Alacritty
-  gets all the way through EGL context creation, font loading, and
+  got all the way through EGL context creation, font loading, and
   window/PTY setup — confirmed via `-vvv` logging, including `Running
   on virgl (Mesa Intel(R) Iris(R) Xe Graphics ...)`, the host's own
-  real GPU name flowing all the way through. It then exits almost
+  real GPU name flowing all the way through — then exited almost
   instantly afterward (`Goodbye` logged well under a second after `PTY
   dimensions`), with no frame ever rendered and no error beyond a
-  bare, contextless `Os { code: 2, kind: NotFound }` — before any
-  redraw event. Ruled out as a cause: backgrounding (reproduces
-  identically run fully interactively), forking (Alacritty's own code
-  never forks), and `cosmic-comp`/the GPU stack itself (the
-  `weston-simple-egl` triangle above proves those work). That leaves
-  something specific to `winit` 0.30.13's own Wayland event loop or
-  protocol handling — likely its client-side-decoration/
-  fractional-scale negotiation path, which `weston-simple-egl`'s much
-  more minimal, raw `wayland-client` approach never exercises at all.
-  Not yet root-caused.
+  bare, contextless `Os { code: 2, kind: NotFound }`. Initially
+  suspected as a `winit`-specific Wayland event-loop bug (client-side
+  decoration or fractional-scale negotiation), since `weston-simple-egl`
+  proved the GPU/compositor stack itself was sound.
+
+  Root-caused later, while getting `sway`+`foot` (§10.3.6.7) working
+  against the same compositor: `foot` hit the exact same `Os { code: 2 }`
+  class of error, but with an unambiguous message —
+  `failed to open PTY: No such file or directory`. `/dev/ptmx` existed
+  (a devtmpfs device node), but this rootfs never mounted a `devpts`
+  filesystem at `/dev/pts`, so `grantpt()`/`ptsname()` had nowhere to
+  resolve the PTY slave — the exact same code path `alacritty_terminal`
+  uses. Fixed by mounting `devpts` at `/dev/pts` in `distro-init`
+  (alongside the `/dev/shm` fix below). Not `winit`-specific at all:
+  re-tested after the fix and Alacritty now runs stably, past PTY setup,
+  actively receiving terminal I/O from its shell.
 ]
 
 ==== cosmic-term: a different crash, not a fix
@@ -1446,6 +1452,82 @@ workspace instead — fixed with a `SourcePatch` appending an empty
   sysroot has no locale data installed at all, a separate gap. Not
   pursued further this session.
 ]
+
+==== sway + foot: a working GUI terminal, finally
+
+With COSMIC's own stack a dead end for a working terminal (Alacritty's
+Gap 2 above, cosmic-term's panic), `sway` — a mature, wlroots-based
+tiling WM, C throughout — was tried as a genuinely different compositor
+stack, paired with `foot`, a lightweight wlroots-native terminal that
+deliberately avoids pango/glib in favor of its own `fcft` font library.
+
+`wlroots` itself needed *zero* new C libraries: every dependency it
+probes for — EGL/GBM/GLESv2 (Mesa), libseat (`seatd`), libdisplay-info,
+libudev, libdrm, xkbcommon, pixman, wayland — was already in this
+sysroot from the Weston/COSMIC/Vulkan work. `sway`'s own `meson.build`
+does pull in a real new chain, though: it declares `pango`/`pangocairo`
+as unconditional dependencies (not gated by the `swaybar`/`swaynag`
+options), which in turn need `glib`+`harfbuzz`+`fribidi` — plus
+`json-c`/`pcre2` for sway's own IPC and config-regex parsing. `foot`, by
+contrast, only needed its own tiny `fcft`/`tllist` font stack — no glib,
+no pango, confirming it's the lighter of the two terminal paths this
+project has tried.
+
+#callout(kind: "trap", "hwdata's pkgdatadir gets sysroot-mangled too")[
+  wlroots' DRM backend reads hwdata's `pnp.ids` (vendor-name table) at
+  build time via a `native: true` pkg-config dependency — but this
+  workspace's `PKG_CONFIG_SYSROOT_DIR` (needed so every *other*
+  pkg-config lookup here finds the shared sysroot, not the host) still
+  mangles hwdata's own `pkgdatadir` variable with that same sysroot
+  prefix, since meson's native and host pkg-config are the same single
+  invocation in a non-cross build — same bug class as weston's pango
+  probe and Mesa's `llvm-config` (§10.3.4/§10.3.6.1). Fixed by staging a
+  copy of the host's `pnp.ids` at the exact path the mangled lookup
+  resolves to, rather than fighting `sysroot_env`'s global
+  `PKG_CONFIG_SYSROOT_DIR` for one native-only dependency.
+]
+
+Boot-tested nested inside a live `cosmic-comp` session (same
+`WAYLAND_DISPLAY=wayland-1` trick `weston-simple-egl` used), sway
+surfaced two more real, previously-hidden rootfs gaps:
+
+#callout(kind: "trap", "No /dev/shm: wlroots' shm allocation failed outright")[
+  `wlroots`' `wl_shm`/dmabuf-feedback format-table allocation needs a
+  real POSIX shm backing (`shm_open`), and failed immediately —
+  `[wlr] [types/wlr_linux_dmabuf_v1.c:537] Failed to allocate shm file
+  for format table`, `sway/server.c:292] Failed to create linux-dmabuf
+  v1`. `devtmpfs` (already mounted at `/dev`) provides device nodes but
+  not a real tmpfs instance for shm; `cosmic-comp`/smithay never hit
+  this gap because it prefers `memfd_create` over `shm_open`. Fixed by
+  mounting a `tmpfs` at `/dev/shm` in `distro-init`, alongside the
+  existing `/proc`/`/sys`/`/dev`/`/run` mounts.
+]
+
+#callout(kind: "trap", "No /dev/pts either — and this was Alacritty's bug all along")[
+  With `/dev/shm` fixed, sway itself ran and rendered correctly
+  (confirmed live via `swaymsg -t get_outputs`: a real 852×496 nested
+  output, `swaybar` actively committing surfaces). Launching `foot`
+  under it hit a second, separate gap, this time with an unambiguous
+  message: `err: terminal.c:1195: failed to open PTY: No such file or
+  directory`. `/dev/ptmx` existed (a `devtmpfs` device node), but this
+  rootfs never mounted a `devpts` filesystem at `/dev/pts`, so
+  `grantpt()`/`ptsname()` had nowhere to resolve the PTY slave. Fixed
+  the same way — `mount(devpts, /dev/pts, ...)` in `distro-init`.
+
+  This is the *exact* code path `alacritty_terminal` uses too (both it
+  and `foot` open a PTY for their shell the same way), and Alacritty's
+  own failure was `Os { code: 2, kind: NotFound }` — `ENOENT`, the same
+  class of error, just without `foot`'s clearer message pointing at the
+  actual missing path. Re-tested Alacritty against the fixed image:
+  it now runs stably, well past `PTY dimensions` (previously the last
+  line logged before an instant `Goodbye`), actively receiving terminal
+  I/O from its shell. Not a `winit`-specific bug at all — see §10.3.6.5's
+  Gap 2, now resolved and cross-referenced here.
+]
+
+With both fixes in place, `sway`+`foot` and Alacritty both work: the
+first fully working GUI terminals in this from-scratch image, two
+independent proofs of the same underlying `/dev/pts` fix.
 
 == The sysroot: how these packages find each other
 
