@@ -5,6 +5,7 @@ pub mod cairo;
 pub mod cosmic_bg;
 pub mod cosmic_comp;
 pub mod dbus;
+pub mod dejavu_fonts;
 pub mod distro_init;
 pub mod eudev;
 pub mod expat;

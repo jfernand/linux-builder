@@ -55,7 +55,15 @@ pub fn assemble_rootfs(cfg: &DistroConfig, force: bool) -> Result<()> {
     }
 
     for dir in [
-        "bin", "sbin", "proc", "sys", "dev", "root", "etc", "var/log", "var/run",
+        "bin", "sbin", "proc", "sys", "dev", "root", "etc", "tmp", "var/log", "var/run",
+        // fontconfig's own fonts.conf (installed by the fontconfig
+        // buildpack itself) declares this as its primary cache
+        // directory — harmless while dejavu_fonts had zero real font
+        // files to scan, but a real Alacritty boot test surfaced it the
+        // moment fonts actually existed to cache: fontconfig's scan
+        // failed with a bare, contextless `Os { code: 2, NotFound }`
+        // once it had real work to do here.
+        "var/cache/fontconfig",
     ] {
         fs::create_dir_all(root.join(dir)).with_context(|| format!("creating rootfs dir {dir}"))?;
     }

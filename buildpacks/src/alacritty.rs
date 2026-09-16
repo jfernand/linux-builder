@@ -67,6 +67,14 @@ impl Buildpack for Alacritty {
         &["wayland", "libxkbcommon"]
     }
 
+    fn functional_dependencies(&self) -> &'static [&'static str] {
+        // Confirmed via a real QEMU boot: without an actual font file
+        // present, Alacritty fails outright at startup with
+        // Font(FontNotFound(...)) — fontconfig (the library) has nothing
+        // to resolve "monospace" to without it.
+        &["dejavu_fonts"]
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "alacritty",

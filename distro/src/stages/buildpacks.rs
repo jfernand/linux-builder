@@ -32,6 +32,7 @@ use buildpacks::cairo::Cairo;
 use buildpacks::cosmic_bg::CosmicBg;
 use buildpacks::cosmic_comp::CosmicComp;
 use buildpacks::dbus::Dbus;
+use buildpacks::dejavu_fonts::DejavuFonts;
 use buildpacks::distro_init::DistroInit;
 use buildpacks::eudev::Eudev;
 use buildpacks::expat::Expat;
@@ -188,6 +189,7 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<VulkanLoader>(cfg, "vulkan_loader")?),
         Box::new(configured::<CosmicComp>(cfg, "cosmic_comp")?),
         Box::new(configured::<CosmicBg>(cfg, "cosmic_bg")?),
+        Box::new(configured::<DejavuFonts>(cfg, "dejavu_fonts")?),
         Box::new(configured::<Alacritty>(cfg, "alacritty")?),
         Box::new(DistroInit::new()),
     ];
