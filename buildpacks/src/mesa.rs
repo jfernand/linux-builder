@@ -52,7 +52,12 @@ impl Buildpack for Mesa {
     }
 
     fn dependencies(&self) -> &'static [&'static str] {
-        &["libdrm", "wayland", "libxkbcommon", "pixman", "libdisplay_info", "libinput"]
+        // vulkan_headers was missing here even after -Dvulkan-drivers=swrast
+        // (§10.3.6.3) started needing its installed vulkan.pc/headers to
+        // compile lavapipe — worked only by accident (registration order
+        // happened to build vulkan_headers first every time this was
+        // actually tested), with no real guarantee from topo_order.
+        &["libdrm", "wayland", "libxkbcommon", "pixman", "libdisplay_info", "libinput", "vulkan_headers"]
     }
 
     fn describe(&self) -> Description {

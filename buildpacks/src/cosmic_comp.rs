@@ -86,6 +86,22 @@ impl Buildpack for CosmicComp {
         &["seatd", "eudev", "libinput", "libdrm", "mesa", "libxkbcommon", "wayland"]
     }
 
+    fn functional_dependencies(&self) -> &'static [&'static str] {
+        // xkeyboard_config: same runtime-only keymap data Weston needs —
+        // disabling it (it's not `required()`) correctly cascade-prunes
+        // cosmic-comp (and cosmic_bg with it) via prune_disabled, same as
+        // disabling cosmic_comp directly would.
+        // dbus: cosmic-comp genuinely tries both session and system D-Bus
+        // connections at startup (confirmed in this project's own boot
+        // logs — they fail today, since no session bus runs and its
+        // system-bus lookup doesn't match how this image starts
+        // dbus-daemon, but the attempt itself is real). dbus is
+        // `required()` and can never be disabled, so this half of the
+        // edge is purely documentary — shown in the graph, never actually
+        // triggers pruning.
+        &["xkeyboard_config", "dbus"]
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "cosmic_comp",

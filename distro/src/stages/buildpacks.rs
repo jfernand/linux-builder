@@ -192,15 +192,40 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(DistroInit::new()),
     ];
 
+    // Cheap, always run: catches a required() package accidentally
+    // gaining a functional dependency on a non-required one (see
+    // check_required_invariant's own doc comment for why that's
+    // dangerous), not just when disabled is actually in use.
+    buildpack_core::graph::check_required_invariant(&all)?;
+
     if cfg.build.disabled.is_empty() {
         return Ok(all);
     }
 
-    if let Some(bad) = all.iter().find(|p| p.required() && cfg.build.disabled.iter().any(|d| d == p.id())) {
-        anyhow::bail!(
-            "[build] disabled cannot include \"{}\" — it's required (the image can't boot without it)",
-            bad.id()
-        );
+    // Every entry must actually change something when pruned: a real id
+    // (not a typo), not required() (disabling it can't boot), and either
+    // final itself or something a final package's functional-dependency
+    // chain runs through (cosmic_comp isn't final on its own anymore —
+    // cosmic_bg depends on it — but disabling it must still cascade to
+    // drop cosmic_bg too; see is_disableable's own doc comment for why
+    // that differs from something like vulkan_headers, a real build
+    // dependency of mesa that disabling directly would silently no-op).
+    for id in &cfg.build.disabled {
+        let Some(pack) = all.iter().find(|p| p.id() == id) else {
+            anyhow::bail!("[build] disabled names \"{id}\", which isn't a known package id");
+        };
+        if pack.required() {
+            anyhow::bail!(
+                "[build] disabled cannot include \"{id}\" — it's required (the image can't boot without it)"
+            );
+        }
+        if !buildpack_core::graph::is_disableable(&all, id) {
+            anyhow::bail!(
+                "[build] disabled cannot include \"{id}\" — disabling it directly would have no effect \
+                 (nothing final depends on it, even functionally); disable whatever final package \
+                 actually uses it instead"
+            );
+        }
     }
 
     let keep = buildpack_core::graph::prune_disabled(&all, &cfg.build.disabled);

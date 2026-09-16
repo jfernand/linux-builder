@@ -65,6 +65,13 @@ impl Buildpack for Weston {
         ]
     }
 
+    fn functional_dependencies(&self) -> &'static [&'static str] {
+        // Keyboard layout/rules *data* (§10.3.3's table) — libxkbcommon
+        // reads it at runtime to resolve a keymap, but nothing links
+        // against it, so it was never a build-order edge.
+        &["xkeyboard_config"]
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "weston",
