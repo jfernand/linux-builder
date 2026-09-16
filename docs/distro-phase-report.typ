@@ -1314,6 +1314,107 @@ having been autotools or meson.
   Vulkan actually gets exercised end-to-end is future work.
 ]
 
+==== Real GPU acceleration: virtio-gpu-gl, not the bochs stub
+
+Every QEMU boot this whole project has ever run — from the first
+Weston milestone through every `cosmic-comp`/`cosmic-bg` test above —
+actually used QEMU's implicit default display device: a scanout-only
+"bochs" VGA stub (PCI id `1234:1111`), never `virtio-gpu`, despite the
+kernel's own `graphics` feature pack enabling `CONFIG_DRM_VIRTIO_GPU`.
+`test_qemu`'s own `qemu-system-x86_64` invocation never asked for a
+better one, and the doc's own earlier claims about "virtio-gpu/virgl"
+were aspirational, not verified — nothing before this checked what
+device was actually present.
+
+This went unnoticed because nothing here had ever needed a real GPU
+render node: Weston fell back to its `softpipe` Gallium driver,
+`cosmic-bg` only ever used `wl_shm` (plain CPU-written pixel buffers,
+§10.3.6.2), and `cosmic-comp`'s own compositing worked via KMS
+dumb-buffer scanout — none of that needs actual 3D/render capability.
+
+#callout(kind: "trap", "What this broke: any client needing real EGL/GL")[
+  A GPU-accelerated Wayland client (the first attempted here was
+  Alacritty, §10.3.6.5) got nothing to render through. Confirmed with
+  `WAYLAND_DEBUG=1`: `cosmic-comp` advertised 57 Wayland globals on
+  connect, and neither `zwp_linux_dmabuf_v1` nor `wl_drm` — the *only*
+  two protocols a client can use to discover which DRM device to hand
+  EGL — was among them, because the bochs stub has no render node to
+  advertise in the first place. Mesa's own `glGetDriverName(fd -1)`
+  call then failed exactly as its error message says.
+]
+
+Fixed in `buildpack_core::pipeline::TestQemu`: `-vga none -device
+virtio-gpu-gl-pci` (suppressing the implicit bochs default), plus a
+matching display backend — `-display gtk,gl=on` for `--window` mode,
+`-display egl-headless` for headless/scripted testing (replacing
+`-nographic`, which forces `-display none`, incompatible with any GL
+backend).
+
+#callout(kind: "ok", "Verified — real GPU acceleration, end to end")[
+  The kernel now reports `[drm] pci: virtio-gpu-pci detected`,
+  `features: +virgl`, `Initialized virtio_gpu 0.1.0`, and `/dev/dri`
+  has a genuine `renderD128` alongside `card0` — none of which ever
+  appeared before. `weston-simple-egl` (§10.3.5's own milestone,
+  bundled with Weston's source but a generic client with no dependency
+  on Weston-the-compositor — anything on `WAYLAND_DISPLAY` will do)
+  run against `cosmic-comp`'s socket renders a continuously-spinning
+  textured triangle, proving the *whole* chain — virtio-gpu → virgl →
+  host GPU → EGL → `cosmic-comp`'s own compositing → a real frame —
+  works correctly end to end. The standard plain-boot regression check
+  (login prompt, `cosmic-comp`/`cosmic-bg` both still starting)
+  confirmed this didn't break anything already working.
+]
+
+==== Alacritty and DejaVu: a real terminal, mostly
+
+`cosmic-term` (§11) is a full `libcosmic`/`iced` application — a much
+heavier dependency chain than anything needed just to prove a terminal
+can run here. Alacritty was picked instead: plain `winit`+`glutin`, no
+COSMIC-specific dependencies at all, and genuinely lighter than
+`cosmic-term` would be. Ghostty was considered and rejected outright —
+its core is Zig, not Rust or C, the standing rule from §11's closing
+callout.
+
+Getting it running surfaced two more real gaps, in order:
+
+#callout(kind: "trap", "Gap 1: no font files, anywhere")[
+  `fontconfig` (the library) has been built and configured since the
+  Weston chain (§10.3.4), but nothing had ever shipped an actual font
+  *file* for it to resolve `"monospace"` to — Alacritty failed outright
+  with `Font(FontNotFound(...))`. Fixed with a new `dejavu_fonts`
+  buildpack: pure data (pre-built TrueType files + fontconfig alias
+  snippets), the same category as `xkeyboard_config`'s XML/lua data —
+  DejaVu is only distributed upstream as release tarballs, not
+  buildable from source without FontForge (a GUI font editor), so this
+  isn't a Rust/C-only rule concern any more than a keyboard layout
+  table is. Installs to `/usr/share/fonts/dejavu` and
+  `/etc/fonts/conf.d`, both already scanned/loaded by this sysroot's
+  own `fonts.conf`. Fixing this also surfaced that `/var/cache/fontconfig`
+  (fontconfig's own declared cache directory) and `/tmp` had never
+  existed in this rootfs at all — harmless until something actually
+  needed them, now both created by `assemble-rootfs`.
+]
+
+#callout(kind: "trap", "Gap 2: winit's own event loop, still open")[
+  With real fonts and real GPU acceleration both in place, Alacritty
+  gets all the way through EGL context creation, font loading, and
+  window/PTY setup — confirmed via `-vvv` logging, including `Running
+  on virgl (Mesa Intel(R) Iris(R) Xe Graphics ...)`, the host's own
+  real GPU name flowing all the way through. It then exits almost
+  instantly afterward (`Goodbye` logged well under a second after `PTY
+  dimensions`), with no frame ever rendered and no error beyond a
+  bare, contextless `Os { code: 2, kind: NotFound }` — before any
+  redraw event. Ruled out as a cause: backgrounding (reproduces
+  identically run fully interactively), forking (Alacritty's own code
+  never forks), and `cosmic-comp`/the GPU stack itself (the
+  `weston-simple-egl` triangle above proves those work). That leaves
+  something specific to `winit` 0.30.13's own Wayland event loop or
+  protocol handling — likely its client-side-decoration/
+  fractional-scale negotiation path, which `weston-simple-egl`'s much
+  more minimal, raw `wayland-client` approach never exercises at all.
+  Not yet root-caused.
+]
+
 == The sysroot: how these packages find each other
 
 Static-base packages (§10.3.1) never need each other at
