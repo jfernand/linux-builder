@@ -330,8 +330,10 @@ fn test_qemu(ctx: &BuildCtx, window: bool) -> Result<()> {
     if window {
         println!(
             "booting {} in QEMU — close the window, or Ctrl-A X here, to quit. \
-             The window shows cosmic-comp once it starts; log in via this terminal's \
-             serial console (ttyS0) to actually get a shell.",
+             Log in as root in the window itself once you see the tty1 prompt there — \
+             it auto-starts cosmic-term once cosmic-comp is up. This terminal's serial \
+             console (ttyS0) still works too, as a plain debug shell that doesn't race \
+             cosmic-comp's startup.",
             image.display()
         );
     } else {

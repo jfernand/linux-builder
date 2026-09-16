@@ -72,6 +72,7 @@ pub fn assemble_rootfs(cfg: &DistroConfig, force: bool) -> Result<()> {
     install_sysroot(cfg, &root)?;
     install_dynamic_linker_and_host_libs(&root)?;
     write_login_config(&root)?;
+    write_bash_profile(&root)?;
 
     Ok(())
 }
@@ -140,5 +141,53 @@ fn write_login_config(root: &Path) -> Result<()> {
         fs::write(root.join(f), [])?;
     }
 
+    Ok(())
+}
+
+/// `/bin/login` execs the shell from `/etc/passwd` (`/bin/bash`) as a
+/// login shell (`argv[0]` starting with `-`), which sources this file —
+/// the one place to both (a) export the two Wayland-session variables
+/// every interactive test in this project otherwise had to set by hand
+/// (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY` — matching `spawn_cosmic_comp`'s
+/// own `XDG_RUNTIME_DIR` and smithay's `ListeningSocketSource::new_auto`
+/// naming, §10.3.6.2), and (b) auto-start a terminal on tty1 specifically
+/// — the one console QEMU's own window actually renders — since
+/// `cosmic-comp` permanently takes DRM/KMS ownership away from tty1's
+/// text console a few seconds into boot, so simply reaching a login
+/// prompt there isn't enough to get a usable session visible in the
+/// window on its own.
+///
+/// The wait loop exists because login can race `cosmic-comp`'s own
+/// startup — its Wayland socket doesn't exist yet the instant tty1's
+/// `agetty` shows a prompt. Falls through to a plain shell if it never
+/// appears (cosmic-kiosk bundle disabled, or cosmic-comp crashed), same
+/// as `ttyS0`, which this deliberately leaves untouched as a plain debug
+/// shell — that's still the way to reach a shell without racing anything
+/// or fighting the window for cosmic-term's own display.
+///
+/// Deliberately avoids external `tty`/`seq` — this project's `uutils`
+/// build only symlinks a curated `COREUTILS_APPLETS` subset under
+/// `/bin` (see `buildpacks/src/uutils.rs`), and neither is in it (the
+/// underlying binary supports both, just unreached without a matching
+/// argv0). `[ path -ef path ]` (same underlying file, i.e. same tty) and
+/// a plain counted `while` loop are pure bash builtins, so this doesn't
+/// silently break the next time that applet list changes.
+fn write_bash_profile(root: &Path) -> Result<()> {
+    fs::write(
+        root.join("root/.bash_profile"),
+        "\
+export XDG_RUNTIME_DIR=/run/user/0
+export WAYLAND_DISPLAY=wayland-1
+
+if [ /proc/self/fd/0 -ef /dev/tty1 ]; then
+    i=0
+    while [ $i -lt 50 ]; do
+        [ -S \"$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY\" ] && exec cosmic-term
+        sleep 0.2
+        i=$((i + 1))
+    done
+fi
+",
+    )?;
     Ok(())
 }
