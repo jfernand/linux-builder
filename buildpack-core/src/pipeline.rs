@@ -281,9 +281,16 @@ fn test_qemu(ctx: &BuildCtx, window: bool) -> Result<()> {
 
     if window {
         // A real window with its own GL context (not just a framebuffer
-        // blit), own keyboard focus, instead of attaching the guest's
-        // serial console to our stdio.
-        cmd.args(["-display", "gtk,gl=on"]);
+        // blit), own keyboard focus. -serial mon:stdio still matters
+        // here: cosmic-comp takes over DRM/KMS ownership from the
+        // kernel's own text console a few seconds into boot, permanently
+        // replacing whatever tty1's agetty had shown in the window with
+        // cosmic-comp's compositor output instead — there is no login
+        // prompt reachable through the window at all once that happens.
+        // The serial console (ttyS0, a separate agetty, unaffected by
+        // DRM ownership) is the only way to actually reach a shell while
+        // the window is up, so it goes to our own stdio here too.
+        cmd.args(["-display", "gtk,gl=on", "-serial", "mon:stdio"]);
     } else {
         // Headless, but still GPU-accelerated: egl-headless renders via
         // the host's own EGL/GBM with no window needed. This replaces
@@ -321,7 +328,12 @@ fn test_qemu(ctx: &BuildCtx, window: bool) -> Result<()> {
     }
 
     if window {
-        println!("booting {} in QEMU (close the window to quit)", image.display());
+        println!(
+            "booting {} in QEMU — close the window, or Ctrl-A X here, to quit. \
+             The window shows cosmic-comp once it starts; log in via this terminal's \
+             serial console (ttyS0) to actually get a shell.",
+            image.display()
+        );
     } else {
         println!("booting {} in QEMU (Ctrl-A X to quit)", image.display());
     }
