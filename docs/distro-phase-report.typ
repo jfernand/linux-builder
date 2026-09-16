@@ -1421,7 +1421,7 @@ Getting it running surfaced two more real gaps, in order:
   actively receiving terminal I/O from its shell.
 ]
 
-==== cosmic-term: a different crash, not a fix
+==== cosmic-term: a different crash, same eventual fix
 
 With Alacritty's `winit` bug parked (§10.3.6.5's Gap 2), `cosmic-term`
 itself was tried as a way to test a specific hypothesis: it depends on a
@@ -1437,20 +1437,32 @@ buildpack: every dependency already resolved, no new C libraries needed
 workspace instead — fixed with a `SourcePatch` appending an empty
 `[workspace]` table, exactly the remedy cargo's own error suggests.
 
-#callout(kind: "trap", "The pop-OS winit fork doesn't sidestep it — it has its own bug")[
+#callout(kind: "trap", "(resolved) The panic was the missing /dev/pts too")[
   Launched against a live `cosmic-comp` session (`WAYLAND_DISPLAY=wayland-1`,
-  the same socket `weston-simple-egl` proved works), `cosmic-term` doesn't
-  exit quietly like Alacritty — it panics outright: `` async fn` resumed
+  the same socket `weston-simple-egl` proved works), `cosmic-term` didn't
+  exit quietly like Alacritty — it panicked outright: `` async fn` resumed
   after completion `` at `iced/winit/src/lib.rs:765` (inside `libcosmic`'s
-  own `iced` fork's event-loop glue), a classic symptom of a future being
-  polled again after it already returned `Poll::Ready`. Different failure
-  mode, different codebase (`iced`'s async executor, not `winit`'s event
-  loop directly), but the same net result: no working GUI Wayland client
-  yet in the from-scratch image beyond the raw-`wayland-client` demo.
-  Also logged (non-fatal, before the panic): repeated `xkbcommon` errors
-  about a missing Compose file for the `en_US.UTF-8`/`C` locales — this
-  sysroot has no locale data installed at all, a separate gap. Not
-  pursued further this session.
+  own `iced` fork's event-loop glue), the classic symptom of a future
+  being polled again after it already returned `Poll::Ready`. Also logged
+  (non-fatal, before the panic): repeated `xkbcommon` errors about a
+  missing Compose file for the `en_US.UTF-8`/`C` locales — this sysroot
+  still has no locale data installed at all, a real but separate,
+  cosmetic gap, not pursued.
+
+  Re-tested after §10.3.6.7's `/dev/pts` fix (added for `foot`, and what
+  turned out to actually fix Alacritty too, §10.3.6.5): `cosmic-term` no
+  longer panics at all. It backgrounds itself via its own `fork`
+  dependency (unlike Alacritty, it daemonizes — the parent shell job
+  shows `Done`, exit 0, while a detached child keeps running), and stays
+  alive indefinitely: confirmed live via `/proc/<pid>/fd` showing open
+  `/dev/dri/renderD128` (×3), a real `/dev/ptmx`, Wayland sockets, and
+  `smithay-client-toolkit`'s `memfd` GPU buffer allocations. The panic
+  was never really `iced`'s event loop misbehaving on its own — almost
+  certainly the same PTY-open failure Alacritty and `foot` both hit,
+  just surfaced as a mishandled future inside `iced`'s async executor
+  instead of a clean `ENOENT`. All three GUI clients this project has
+  tried — Alacritty, `foot`, `cosmic-term` — trace back to the single
+  `/dev/pts` gap.
 ]
 
 ==== sway + foot: a working GUI terminal, finally
