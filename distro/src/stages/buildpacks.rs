@@ -37,8 +37,14 @@ use buildpacks::dejavu_fonts::DejavuFonts;
 use buildpacks::distro_init::DistroInit;
 use buildpacks::eudev::Eudev;
 use buildpacks::expat::Expat;
+use buildpacks::fcft::Fcft;
 use buildpacks::fontconfig::Fontconfig;
+use buildpacks::foot::Foot;
 use buildpacks::freetype::Freetype;
+use buildpacks::fribidi::Fribidi;
+use buildpacks::glib::Glib;
+use buildpacks::harfbuzz::Harfbuzz;
+use buildpacks::json_c::JsonC;
 use buildpacks::kernel::Kernel;
 use buildpacks::libdisplay_info::LibdisplayInfo;
 use buildpacks::libdrm::Libdrm;
@@ -47,9 +53,13 @@ use buildpacks::libinput::Libinput;
 use buildpacks::libpng::Libpng;
 use buildpacks::libxkbcommon::Libxkbcommon;
 use buildpacks::mesa::Mesa;
+use buildpacks::pango::Pango;
+use buildpacks::pcre2::Pcre2;
 use buildpacks::pixman::Pixman;
 use buildpacks::seatd::Seatd;
 use buildpacks::shadow::Shadow;
+use buildpacks::sway::Sway;
+use buildpacks::tllist::Tllist;
 use buildpacks::util_linux::UtilLinux;
 use buildpacks::uutils::Uutils;
 use buildpacks::vulkan_headers::VulkanHeaders;
@@ -57,6 +67,7 @@ use buildpacks::vulkan_loader::VulkanLoader;
 use buildpacks::wayland::Wayland;
 use buildpacks::wayland_protocols::WaylandProtocols;
 use buildpacks::weston::Weston;
+use buildpacks::wlroots::Wlroots;
 use buildpacks::xkeyboard_config::XkeyboardConfig;
 use buildpacks::zlib::Zlib;
 use std::path::{Path, PathBuf};
@@ -156,10 +167,13 @@ pub fn kernel_ctx(cfg: &DistroConfig) -> BuildCtx {
 /// compositor nothing draws through; paired with `cosmic_bg` it's an
 /// actual (if minimal) usable desktop.
 fn bundles() -> Vec<buildpack_core::graph::Bundle> {
-    vec![buildpack_core::graph::Bundle {
-        name: "cosmic-kiosk",
-        members: &["cosmic_comp", "cosmic_bg", "cosmic_term"],
-    }]
+    vec![
+        buildpack_core::graph::Bundle {
+            name: "cosmic-kiosk",
+            members: &["cosmic_comp", "cosmic_bg", "cosmic_term"],
+        },
+        buildpack_core::graph::Bundle { name: "sway-kiosk", members: &["sway", "foot"] },
+    ]
 }
 
 pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
@@ -196,6 +210,17 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<CosmicTerm>(cfg, "cosmic_term")?),
         Box::new(configured::<DejavuFonts>(cfg, "dejavu_fonts")?),
         Box::new(configured::<Alacritty>(cfg, "alacritty")?),
+        Box::new(configured::<JsonC>(cfg, "json_c")?),
+        Box::new(configured::<Pcre2>(cfg, "pcre2")?),
+        Box::new(configured::<Glib>(cfg, "glib")?),
+        Box::new(configured::<Harfbuzz>(cfg, "harfbuzz")?),
+        Box::new(configured::<Fribidi>(cfg, "fribidi")?),
+        Box::new(configured::<Pango>(cfg, "pango")?),
+        Box::new(configured::<Wlroots>(cfg, "wlroots")?),
+        Box::new(configured::<Sway>(cfg, "sway")?),
+        Box::new(configured::<Tllist>(cfg, "tllist")?),
+        Box::new(configured::<Fcft>(cfg, "fcft")?),
+        Box::new(configured::<Foot>(cfg, "foot")?),
         Box::new(DistroInit::new()),
     ];
 

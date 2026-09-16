@@ -138,6 +138,53 @@ url = "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_
 git_url = "https://github.com/alacritty/alacritty.git"
 git_rev = "94e7c8874e526b1e67b349d9ba30ddf81669119e"
 
+# sway + foot — an alternative to the COSMIC kiosk stack (see [cosmic_comp]
+# above): a mature, wlroots-based, C-throughout WM/terminal combination.
+
+[json_c]
+version = "0.18-20240915"
+url = "https://github.com/json-c/json-c/archive/refs/tags/json-c-0.18-20240915.tar.gz"
+
+[pcre2]
+version = "10.44"
+url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.bz2"
+
+[glib]
+version = "2.82.5"
+url = "https://download.gnome.org/sources/glib/2.82/glib-2.82.5.tar.xz"
+
+[harfbuzz]
+version = "10.1.0"
+url = "https://github.com/harfbuzz/harfbuzz/releases/download/10.1.0/harfbuzz-10.1.0.tar.xz"
+
+[fribidi]
+version = "1.0.16"
+url = "https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz"
+
+[pango]
+version = "1.54.0"
+url = "https://download.gnome.org/sources/pango/1.54/pango-1.54.0.tar.xz"
+
+[wlroots]
+version = "0.20.2"
+url = "https://gitlab.freedesktop.org/wlroots/wlroots/-/archive/0.20.2/wlroots-0.20.2.tar.gz"
+
+[sway]
+version = "1.12"
+url = "https://github.com/swaywm/sway/archive/refs/tags/1.12.tar.gz"
+
+[tllist]
+version = "1.1.0"
+url = "https://codeberg.org/dnkl/tllist/archive/1.1.0.tar.gz"
+
+[fcft]
+version = "3.3.3"
+url = "https://codeberg.org/dnkl/fcft/archive/3.3.3.tar.gz"
+
+[foot]
+version = "1.28.0"
+url = "https://codeberg.org/dnkl/foot/archive/1.28.0.tar.gz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048

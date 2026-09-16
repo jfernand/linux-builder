@@ -41,6 +41,25 @@ fn mount_basic_filesystems() {
     // dbus-daemon expects this directory to already exist for its system
     // bus socket; nothing else creates it now that /run is a fresh tmpfs.
     let _ = std::fs::create_dir("/run/dbus");
+    // wlroots' shm-based wl_shm/dmabuf-feedback format-table allocation
+    // (shm_open, not memfd_create) needs a real /dev/shm — devtmpfs above
+    // doesn't provide one, so without this wlroots clients (sway) fail
+    // immediately with "Failed to allocate shm file for format table".
+    // cosmic-comp/smithay never hit this gap since it prefers memfd_create.
+    // devtmpfs just freshly overmounted /dev above, so /dev/shm as a mount
+    // point doesn't exist yet either — create it first.
+    let _ = std::fs::create_dir("/dev/shm");
+    let _ = mount(Some("tmpfs"), "/dev/shm", Some("tmpfs"), MsFlags::empty(), None::<&str>);
+    // Any terminal emulator that opens /dev/ptmx to allocate a PTY for its
+    // shell (Alacritty, cosmic-term, foot) needs the resulting slave device
+    // to resolve under /dev/pts/N — without devpts mounted here, /dev/ptmx
+    // itself exists (a devtmpfs-provided device node) but grantpt()/
+    // ptsname() on it fails, since there's no multi-instance devpts
+    // filesystem backing it. No `gid=` override: this rootfs's /etc/group
+    // (shadow's own minimal output) has no `tty` group to reference, so
+    // PTY slaves stay root:root like every other device node here.
+    let _ = std::fs::create_dir("/dev/pts");
+    let _ = mount(Some("devpts"), "/dev/pts", Some("devpts"), MsFlags::empty(), Some("mode=0620"));
     // wayland-server (via cosmic-comp) refuses to create its socket
     // unless XDG_RUNTIME_DIR exists with exactly these permissions —
     // 0700, since it's meant to be private to the user running it.
