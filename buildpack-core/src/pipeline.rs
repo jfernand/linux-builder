@@ -264,14 +264,34 @@ fn test_qemu(ctx: &BuildCtx, window: bool) -> Result<()> {
         "1024",
         "-drive",
         &format!("file={},format=raw,if=virtio", image.display()),
+        // Real GPU acceleration (virgl, via the host's own GL/EGL/GBM
+        // stack) — without this the machine type's own implicit default
+        // display is a scanout-only "bochs" VGA stub with no render node
+        // at all, which is why every GPU-accelerated client this project
+        // has tried (Alacritty via winit/glutin) found nothing to render
+        // through: cosmic-comp never had a real device to advertise
+        // zwp_linux_dmabuf_v1/wl_drm for in the first place. `-vga none`
+        // suppresses that implicit default so virtio-gpu-gl-pci is the
+        // only display device the guest ever sees.
+        "-vga",
+        "none",
+        "-device",
+        "virtio-gpu-gl-pci",
     ]);
 
     if window {
-        // Let QEMU open its own graphical window (its default display
-        // backend) with its own keyboard focus, instead of attaching the
-        // guest's serial console to our stdio.
+        // A real window with its own GL context (not just a framebuffer
+        // blit), own keyboard focus, instead of attaching the guest's
+        // serial console to our stdio.
+        cmd.args(["-display", "gtk,gl=on"]);
     } else {
-        cmd.arg("-nographic");
+        // Headless, but still GPU-accelerated: egl-headless renders via
+        // the host's own EGL/GBM with no window needed. This replaces
+        // -nographic (which forces -display none, incompatible with any
+        // GL display backend) — -serial mon:stdio multiplexes both the
+        // serial console and QEMU's monitor onto our stdio, the same
+        // Ctrl-A C/X behavior -nographic gave.
+        cmd.args(["-display", "egl-headless", "-serial", "mon:stdio"]);
     }
 
     if ctx.networking {
