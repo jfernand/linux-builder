@@ -48,6 +48,10 @@ impl Buildpack for Shadow {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // login/passwd — nothing to authenticate against without it
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "shadow",

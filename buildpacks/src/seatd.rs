@@ -51,6 +51,10 @@ impl Buildpack for Seatd {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // distro-init execs seatd unconditionally, no existence check
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "seatd",

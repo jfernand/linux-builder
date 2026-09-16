@@ -44,6 +44,10 @@ impl Buildpack for DistroInit {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // PID 1 — nothing boots without it
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "distro_init",

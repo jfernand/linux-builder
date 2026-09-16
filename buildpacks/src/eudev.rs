@@ -48,6 +48,10 @@ impl Buildpack for Eudev {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // distro-init execs udevd unconditionally, no existence check
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "eudev",

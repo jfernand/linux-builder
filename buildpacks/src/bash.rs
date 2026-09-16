@@ -48,6 +48,10 @@ impl Buildpack for Bash {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // the only shell this image has
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "bash",

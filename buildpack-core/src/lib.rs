@@ -120,6 +120,35 @@ pub trait Buildpack {
     /// pixman/libdisplay-info/libinput).
     fn dependencies(&self) -> &'static [&'static str];
 
+    /// Buildpack ids this one needs *running* at runtime but never links
+    /// against or otherwise needs present at build time — so they're
+    /// deliberately absent from `dependencies()` (build-order only, see
+    /// its own doc comment). E.g. `cosmic_bg` connects to `cosmic_comp`'s
+    /// Wayland socket at runtime but doesn't need it to exist to compile.
+    /// Shown as dashed edges in the dependency graph; never consulted by
+    /// `topo_order` (build order genuinely doesn't depend on this), but
+    /// `graph::prune_disabled` does walk it — a package that's
+    /// functionally dead without something disabled gets pruned too, even
+    /// though nothing links against it at build time. Default empty —
+    /// most buildpacks have no such edge.
+    fn functional_dependencies(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// True for the handful of "final" packages (§11's sense — nothing
+    /// depends on them, so they're opt-out-able in principle, see
+    /// `DistroConfig`'s `[build] disabled`) whose absence wouldn't just
+    /// shrink the image but leave it unable to boot to a usable shell at
+    /// all: `distro-init` (PID 1 itself), `uutils`/`bash`/`util-linux`
+    /// (no coreutils, no shell, no `agetty` to even show a login prompt),
+    /// `shadow` (no `login` to authenticate against). Attempting to
+    /// disable a required package is a hard config error, not a silently
+    /// ignored one. Default false — everything graphics/COSMIC-related
+    /// (Weston, cosmic-comp, Alacritty, ...) stays freely optional.
+    fn required(&self) -> bool {
+        false
+    }
+
     fn describe(&self) -> Description;
 
     /// Where this buildpack's source lives / how to get it.

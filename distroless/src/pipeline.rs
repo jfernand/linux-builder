@@ -120,7 +120,7 @@ pub fn build_new_packages(cfg: &DistroConfig, force: bool) -> Result<()> {
     // Unlike the fetch/build loop above, the graph is drawn from the full
     // package list, kernel included.
     let svg_path = cfg.build_dir.join("dependency-graph.svg");
-    if let Err(e) = buildpack_core::graph::write_svg(&packs, |id| ctx_for(id, cfg), &svg_path) {
+    if let Err(e) = buildpack_core::graph::write_svg(&packs, |id| ctx_for(id, cfg), &[], &svg_path) {
         println!("warning: couldn't write dependency graph SVG: {e}");
     } else {
         println!("wrote dependency graph to {}", svg_path.display());

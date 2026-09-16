@@ -149,6 +149,10 @@ impl Buildpack for Kernel {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // nothing boots without a kernel
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "kernel",

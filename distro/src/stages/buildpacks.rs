@@ -26,6 +26,7 @@
 use anyhow::{Context, Result};
 use buildpack_core::config::DistroConfig;
 use buildpack_core::{BuildCtx, Buildpack, InstallMode};
+use buildpacks::alacritty::Alacritty;
 use buildpacks::bash::Bash;
 use buildpacks::cairo::Cairo;
 use buildpacks::cosmic_bg::CosmicBg;
@@ -147,8 +148,17 @@ pub fn kernel_ctx(cfg: &DistroConfig) -> BuildCtx {
 /// too expensive to redo needlessly) filter it out themselves below; the
 /// dependency graph and rootfs install pass use the full list as-is. In
 /// registration order (irrelevant — `topo_order` sorts it for real).
+/// Named groupings of buildpacks that only really make sense together —
+/// purely organizational (a labeled box in the dependency-graph SVG), no
+/// effect on build order or `disabled`/pruning. `cosmic_comp` alone is a
+/// compositor nothing draws through; paired with `cosmic_bg` it's an
+/// actual (if minimal) usable desktop.
+fn bundles() -> Vec<buildpack_core::graph::Bundle> {
+    vec![buildpack_core::graph::Bundle { name: "cosmic-kiosk", members: &["cosmic_comp", "cosmic_bg"] }]
+}
+
 pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
-    Ok(vec![
+    let all: Vec<Box<dyn Buildpack>> = vec![
         Box::new(configured::<Kernel>(cfg, "kernel")?),
         Box::new(configured::<Uutils>(cfg, "uutils")?),
         Box::new(configured::<Bash>(cfg, "bash")?),
@@ -178,8 +188,23 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<VulkanLoader>(cfg, "vulkan_loader")?),
         Box::new(configured::<CosmicComp>(cfg, "cosmic_comp")?),
         Box::new(configured::<CosmicBg>(cfg, "cosmic_bg")?),
+        Box::new(configured::<Alacritty>(cfg, "alacritty")?),
         Box::new(DistroInit::new()),
-    ])
+    ];
+
+    if cfg.build.disabled.is_empty() {
+        return Ok(all);
+    }
+
+    if let Some(bad) = all.iter().find(|p| p.required() && cfg.build.disabled.iter().any(|d| d == p.id())) {
+        anyhow::bail!(
+            "[build] disabled cannot include \"{}\" — it's required (the image can't boot without it)",
+            bad.id()
+        );
+    }
+
+    let keep = buildpack_core::graph::prune_disabled(&all, &cfg.build.disabled);
+    Ok(all.into_iter().filter(|p| keep.contains(p.id())).collect())
 }
 
 /// Fetches every package but the kernel (which has its own `fetch()` via
@@ -218,7 +243,7 @@ pub fn build_new_packages(cfg: &DistroConfig, force: bool) -> Result<()> {
     // everything else here, just one that this pipeline stage doesn't
     // itself fetch/build.
     let svg_path = cfg.build_dir.join("dependency-graph.svg");
-    if let Err(e) = buildpack_core::graph::write_svg(&packs, |id| ctx_for(id, cfg), &svg_path) {
+    if let Err(e) = buildpack_core::graph::write_svg(&packs, |id| ctx_for(id, cfg), &bundles(), &svg_path) {
         println!("warning: couldn't write dependency graph SVG: {e}");
     } else {
         println!("wrote dependency graph to {}", svg_path.display());

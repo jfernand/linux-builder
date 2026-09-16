@@ -76,6 +76,13 @@ impl Buildpack for CosmicBg {
         &["wayland", "libxkbcommon"]
     }
 
+    fn functional_dependencies(&self) -> &'static [&'static str] {
+        // The real, runtime-only edge dependencies() deliberately omits:
+        // cosmic-bg is inert without cosmic-comp actually running to open
+        // the Wayland socket it connects to.
+        &["cosmic_comp"]
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "cosmic_bg",

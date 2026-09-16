@@ -61,6 +61,10 @@ impl Buildpack for UtilLinux {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // agetty — no login prompt at all without it
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "util_linux",

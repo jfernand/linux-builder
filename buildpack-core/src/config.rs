@@ -18,11 +18,24 @@ pub struct ImageSettings {
     pub hostname: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct BuildSettings {
+    /// Ids of "final" buildpacks (§11's sense: nothing else's
+    /// `dependencies()` lists them, so build-order graph-theoretically
+    /// they're leaves — a real compositor, a shell, an end-user binary,
+    /// not a shared library) to skip entirely. `all_packages()` prunes
+    /// each one along with anything whose *only* remaining path forward
+    /// led exclusively to it — see `graph::prune_disabled`.
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DistroConfig {
     pub build_dir: PathBuf,
     pub networking: bool,
     pub image: ImageSettings,
+    pub build: BuildSettings,
     /// Every other top-level table in the TOML file, keyed by section
     /// name — one entry per buildpack id. Untyped on purpose: this
     /// container never needs to know what's inside a package's table,
@@ -30,9 +43,9 @@ pub struct DistroConfig {
     pub packages: BTreeMap<String, toml::Value>,
 }
 
-/// The 3 keys this container itself understands; everything else in the
+/// The 4 keys this container itself understands; everything else in the
 /// file is a package table.
-const RESERVED_KEYS: &[&str] = &["build_dir", "networking", "image"];
+const RESERVED_KEYS: &[&str] = &["build_dir", "networking", "image", "build"];
 
 impl DistroConfig {
     pub fn load(path: &Path) -> Result<Self> {
@@ -64,13 +77,21 @@ impl DistroConfig {
             .try_into()
             .context("parsing [image]")?;
 
+        let build = table
+            .get("build")
+            .cloned()
+            .map(|v| v.try_into())
+            .transpose()
+            .context("parsing [build]")?
+            .unwrap_or_default();
+
         let packages = table
             .iter()
             .filter(|(k, _)| !RESERVED_KEYS.contains(&k.as_str()))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        Ok(Self { build_dir, networking, image, packages })
+        Ok(Self { build_dir, networking, image, build, packages })
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -78,6 +99,9 @@ impl DistroConfig {
         table.insert("build_dir".to_string(), toml::Value::try_from(&self.build_dir)?);
         table.insert("networking".to_string(), toml::Value::Boolean(self.networking));
         table.insert("image".to_string(), toml::Value::try_from(&self.image)?);
+        if !self.build.disabled.is_empty() {
+            table.insert("build".to_string(), toml::Value::try_from(&self.build)?);
+        }
         for (id, value) in &self.packages {
             table.insert(id.clone(), value.clone());
         }
@@ -122,7 +146,7 @@ mod tests {
         assert_eq!(cfg.image.hostname, "distro");
         assert_eq!(cfg.image.size_mb, 2048);
         assert_eq!(cfg.image.arch, "x86_64");
-        assert_eq!(cfg.packages.len(), 29); // every [section] except build_dir/networking/image
+        assert_eq!(cfg.packages.len(), 30); // every [section] except build_dir/networking/image
         let mesa = cfg.packages.get("mesa").expect("mesa section");
         assert_eq!(mesa.get("version").and_then(|v| v.as_str()), Some("26.2.2"));
 

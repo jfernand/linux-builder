@@ -49,6 +49,10 @@ impl Buildpack for Dbus {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // distro-init execs dbus-daemon unconditionally, no existence check
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "dbus",

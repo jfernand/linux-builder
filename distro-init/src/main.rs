@@ -2,18 +2,22 @@
 //! udevd/seatd/dbus (Phase 2's device-management and seat/session
 //! plumbing), `cosmic-comp` and `cosmic-bg` (COSMIC's compositor and
 //! background renderer, §10.3.6 of the phase report) once devices have
-//! settled, and supervises `agetty` on both the VGA console and the
-//! serial console — respawning any of the six services if it exits and
-//! reaping any other orphaned children. `agetty` execs `/bin/login`
-//! (shadow-utils) once a username is entered, which authenticates
-//! against `/etc/passwd`/`/etc/shadow` and execs the user's shell — this
-//! replaces Phase 1a's direct shell spawn.
+//! settled — but only if a `distro.toml` build actually installed them;
+//! the cosmic-kiosk bundle is an opt-out-able "final" pack pair (§11), so
+//! this checks for the binaries rather than assuming they exist — and
+//! supervises `agetty` on both the VGA console and the serial console.
+//! Every present service gets respawned if it exits, and any other
+//! orphaned child gets reaped. `agetty` execs `/bin/login` (shadow-utils)
+//! once a username is entered, which authenticates against
+//! `/etc/passwd`/`/etc/shadow` and execs the user's shell — this replaces
+//! Phase 1a's direct shell spawn.
 
 use nix::mount::{mount, MsFlags};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{execv, fork, ForkResult, Pid};
 use std::ffi::CString;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::time::Duration;
 
 const AGETTY: &str = "/sbin/agetty";
@@ -165,34 +169,55 @@ fn main() {
     // the one-time cost of waiting for real device nodes buys not racing
     // cosmic-comp's DRM/libinput probing against udevd's coldplug queue.
     settle_devices();
-    let mut cosmic_comp_pid = spawn_cosmic_comp();
-    let mut cosmic_bg_pid = spawn_cosmic_bg();
-    println!("distro-init: starting {COSMIC_COMP} and {COSMIC_BG}");
+    // cosmic-comp/cosmic-bg are the one pair of services here that's
+    // meant to be genuinely optional (§11's "final packages, opt-out/in"
+    // — a distro.toml build without the cosmic-kiosk bundle just never
+    // installs these binaries at all), so — unlike every other spawn_*
+    // above, which assumes its binary exists because build-time made it
+    // required — this checks first and skips silently if absent, rather
+    // than crash-looping forever on a missing executable.
+    let mut cosmic_comp_pid = Path::new(COSMIC_COMP).exists().then(spawn_cosmic_comp);
+    let mut cosmic_bg_pid = Path::new(COSMIC_BG).exists().then(spawn_cosmic_bg);
+    match (cosmic_comp_pid.is_some(), cosmic_bg_pid.is_some()) {
+        (true, true) => println!("distro-init: starting {COSMIC_COMP} and {COSMIC_BG}"),
+        (true, false) => println!("distro-init: starting {COSMIC_COMP} ({COSMIC_BG} not installed)"),
+        (false, _) => println!("distro-init: {COSMIC_COMP} not installed, skipping the desktop"),
+    }
 
     loop {
         match waitpid(None, Some(WaitPidFlag::empty())) {
-            Ok(WaitStatus::Exited(pid, _)) | Ok(WaitStatus::Signaled(pid, _, _)) => {
+            Ok(status @ (WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _))) => {
+                // Distinguishing a clean exit(code) from a raw signal
+                // (SIGSEGV, SIGABRT, ...) matters here: a Rust panic
+                // normally prints its own message before exiting 101, so
+                // silence plus this line naming a signal instead is the
+                // tell that something crashed below the language runtime.
+                let reason = match status {
+                    WaitStatus::Exited(_, code) => format!("exit code {code}"),
+                    WaitStatus::Signaled(_, signal, _) => format!("signal {signal:?}"),
+                    _ => unreachable!(),
+                };
                 if pid == tty1_pid {
-                    println!("distro-init: tty1 agetty exited, respawning");
+                    println!("distro-init: tty1 agetty exited ({reason}), respawning");
                     tty1_pid = spawn_tty1();
                 } else if pid == serial_pid {
-                    println!("distro-init: ttyS0 agetty exited, respawning");
+                    println!("distro-init: ttyS0 agetty exited ({reason}), respawning");
                     serial_pid = spawn_serial();
                 } else if pid == seatd_pid {
-                    println!("distro-init: seatd exited, respawning");
+                    println!("distro-init: seatd exited ({reason}), respawning");
                     seatd_pid = spawn_seatd();
                 } else if pid == dbus_pid {
-                    println!("distro-init: dbus-daemon exited, respawning");
+                    println!("distro-init: dbus-daemon exited ({reason}), respawning");
                     dbus_pid = spawn_dbus();
                 } else if pid == udevd_pid {
-                    println!("distro-init: udevd exited, respawning");
+                    println!("distro-init: udevd exited ({reason}), respawning");
                     udevd_pid = spawn_udevd();
-                } else if pid == cosmic_comp_pid {
-                    println!("distro-init: cosmic-comp exited, respawning");
-                    cosmic_comp_pid = spawn_cosmic_comp();
-                } else if pid == cosmic_bg_pid {
-                    println!("distro-init: cosmic-bg exited, respawning");
-                    cosmic_bg_pid = spawn_cosmic_bg();
+                } else if cosmic_comp_pid == Some(pid) {
+                    println!("distro-init: cosmic-comp exited ({reason}), respawning");
+                    cosmic_comp_pid = Some(spawn_cosmic_comp());
+                } else if cosmic_bg_pid == Some(pid) {
+                    println!("distro-init: cosmic-bg exited ({reason}), respawning");
+                    cosmic_bg_pid = Some(spawn_cosmic_bg());
                 }
                 // Otherwise this was just reaping an orphaned child.
             }

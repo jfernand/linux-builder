@@ -98,6 +98,10 @@ impl Buildpack for Uutils {
         &[]
     }
 
+    fn required(&self) -> bool {
+        true // coreutils — nothing else here works without them
+    }
+
     fn describe(&self) -> Description {
         Description {
             id: "uutils",

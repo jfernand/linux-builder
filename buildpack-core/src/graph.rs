@@ -4,9 +4,100 @@
 
 use crate::{BuildCtx, Buildpack};
 use anyhow::{bail, Context, Result};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 use std::process::Command;
+
+/// A named grouping of buildpack ids, purely organizational — no bearing
+/// on build order, pruning, or anything else. Exists so the dependency
+/// graph can draw a labeled box around packages that only really make
+/// sense together (e.g. `cosmic_comp` + `cosmic_bg`: neither is a usable
+/// "product" without the other, unlike a shared library such as
+/// `libdrm`, which has no bundle of its own).
+pub struct Bundle {
+    pub name: &'static str,
+    pub members: &'static [&'static str],
+}
+
+/// Ids of "final" buildpacks: those nothing else's `dependencies()`
+/// lists, i.e. no build-order arrow leaves them. Graph-theoretically
+/// these are the sinks — a real compositor, a shell, an end-user binary
+/// — as opposed to a shared library something else consumes. Computed
+/// from the graph itself, never hand-tagged, so it can't drift from
+/// reality as buildpacks are added or their `dependencies()` change.
+pub fn final_packages(packs: &[Box<dyn Buildpack>]) -> Vec<&'static str> {
+    let index_of: HashMap<&'static str, usize> =
+        packs.iter().enumerate().map(|(i, p)| (p.id(), i)).collect();
+    let mut has_dependents = vec![false; packs.len()];
+    for pack in packs {
+        for dep_id in pack.dependencies() {
+            if let Some(&dep_idx) = index_of.get(dep_id) {
+                has_dependents[dep_idx] = true;
+            }
+        }
+    }
+    packs.iter().enumerate().filter(|&(i, _)| !has_dependents[i]).map(|(_, p)| p.id()).collect()
+}
+
+/// Ids to keep after removing `disabled` final packages, any other final
+/// package that's functionally dead without one of them (e.g. `cosmic_bg`
+/// is itself final — nothing builds against it — but useless without
+/// `cosmic_comp`; disabling `cosmic_comp` drops `cosmic_bg` too, found by
+/// walking `functional_dependencies()`), and anything whose only
+/// remaining path forward led exclusively to one of those — computed as
+/// backward build-order reachability from every *surviving* final
+/// package (every non-final package is, by construction, an ancestor of
+/// some final one, so this can't accidentally orphan a real dependency
+/// still needed elsewhere: it stays reachable from whichever other final
+/// package still needs it).
+pub fn prune_disabled(packs: &[Box<dyn Buildpack>], disabled: &[String]) -> HashSet<&'static str> {
+    let index_of: HashMap<&'static str, usize> =
+        packs.iter().enumerate().map(|(i, p)| (p.id(), i)).collect();
+    let disabled_idx: HashSet<usize> =
+        disabled.iter().filter_map(|d| index_of.get(d.as_str()).copied()).collect();
+
+    // True if `start` is disabled itself, or transitively functionally
+    // depends on something disabled — so keeping it would just build a
+    // client with nothing to connect to.
+    let functionally_dead = |start: usize| -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![start];
+        while let Some(i) = stack.pop() {
+            if disabled_idx.contains(&i) {
+                return true;
+            }
+            if !seen.insert(i) {
+                continue;
+            }
+            for dep_id in packs[i].functional_dependencies() {
+                if let Some(&dep_idx) = index_of.get(dep_id) {
+                    stack.push(dep_idx);
+                }
+            }
+        }
+        false
+    };
+
+    let mut keep = HashSet::new();
+    let mut stack: Vec<usize> = final_packages(packs)
+        .into_iter()
+        .filter_map(|id| index_of.get(id).copied())
+        .filter(|&i| !functionally_dead(i))
+        .collect();
+
+    while let Some(i) = stack.pop() {
+        if !keep.insert(i) {
+            continue;
+        }
+        for dep_id in packs[i].dependencies() {
+            if let Some(&dep_idx) = index_of.get(dep_id) {
+                stack.push(dep_idx);
+            }
+        }
+    }
+
+    keep.into_iter().map(|i| packs[i].id()).collect()
+}
 
 /// Returns indices into `packs`, in an order that respects every declared
 /// dependency edge (a dependency's index always precedes its dependents').
@@ -61,9 +152,19 @@ pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
     Ok(order)
 }
 
-/// Renders `packs`' dependency graph as Graphviz DOT source — an edge per
-/// declared `dependencies()` entry, pointing from prerequisite to
-/// dependent (the same direction `topo_order` builds its adjacency in).
+/// Renders `packs`' dependency graph as Graphviz DOT source.
+///
+/// Solid edges are build-order `dependencies()` (prerequisite ->
+/// dependent, the same direction `topo_order` builds its adjacency in);
+/// dashed gray edges are `functional_dependencies()` — real but
+/// runtime-only relationships (e.g. `cosmic_bg ⇢ cosmic_comp`) that never
+/// influence build order. Final packages (`final_packages`: nothing
+/// depends on them for building) get a bold border, marking them as the
+/// products/leaves this graph exists to help choose between, rather than
+/// shared infrastructure. `bundles` draws a labeled dashed box around
+/// packages that only make sense together — purely organizational, no
+/// effect on order or pruning.
+///
 /// `ctx_for` resolves each buildpack's `BuildCtx` (needed to call
 /// `outputs()`, which some buildpacks — e.g. util-linux in `full` mode —
 /// compute by scanning a build directory that may not exist yet; those
@@ -71,10 +172,11 @@ pub fn topo_order(packs: &[Box<dyn Buildpack>]) -> Result<Vec<usize>> {
 /// more than one declared output gets each one listed in its node label
 /// (e.g. `shadow`'s `login`/`passwd`, `weston`'s compositor binary +
 /// `.pc` marker) — with only one output, the id alone is enough.
-pub fn to_dot(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx) -> String {
-    let mut dot =
-        String::from("digraph buildpacks {\n    rankdir=LR;\n    node [shape=box, fontname=\"monospace\"];\n");
-    for pack in packs {
+pub fn to_dot(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx, bundles: &[Bundle]) -> String {
+    let finals: HashSet<&str> = final_packages(packs).into_iter().collect();
+    let bundled: HashSet<&str> = bundles.iter().flat_map(|b| b.members.iter().copied()).collect();
+
+    let node_decl = |pack: &Box<dyn Buildpack>| -> String {
         let outputs = pack.outputs(&ctx_for(pack.id()));
         let label = if outputs.len() > 1 {
             let mut lines = vec![pack.id().to_string()];
@@ -83,11 +185,43 @@ pub fn to_dot(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx) 
         } else {
             pack.id().to_string()
         };
-        dot.push_str(&format!("    \"{}\" [label=\"{label}\"];\n", pack.id()));
+        let style = if finals.contains(pack.id()) { ", penwidth=2" } else { "" };
+        format!("    \"{}\" [label=\"{label}\"{style}];\n", pack.id())
+    };
+
+    let mut dot =
+        String::from("digraph buildpacks {\n    rankdir=LR;\n    node [shape=box, fontname=\"monospace\"];\n");
+
+    for pack in packs {
+        if !bundled.contains(pack.id()) {
+            dot.push_str(&node_decl(pack));
+        }
+    }
+    for (i, bundle) in bundles.iter().enumerate() {
+        dot.push_str(&format!(
+            "    subgraph cluster_{i} {{\n        label=\"{}\";\n        style=dashed;\n",
+            bundle.name
+        ));
+        for pack in packs.iter().filter(|p| bundle.members.contains(&p.id())) {
+            dot.push_str("    ");
+            dot.push_str(&node_decl(pack));
+        }
+        dot.push_str("    }\n");
+    }
+
+    for pack in packs {
         for dep in pack.dependencies() {
             dot.push_str(&format!("    \"{}\" -> \"{}\";\n", dep, pack.id()));
         }
+        for dep in pack.functional_dependencies() {
+            dot.push_str(&format!(
+                "    \"{}\" -> \"{}\" [style=dashed, color=gray40];\n",
+                dep,
+                pack.id()
+            ));
+        }
     }
+
     dot.push_str("}\n");
     dot
 }
@@ -98,8 +232,13 @@ pub fn to_dot(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx) 
 /// on what and what each package produces, since `dependencies()`/
 /// `outputs()` are the only places that information is declared today (no
 /// separate diagram to keep in sync by hand).
-pub fn write_svg(packs: &[Box<dyn Buildpack>], ctx_for: impl Fn(&str) -> BuildCtx, path: &Path) -> Result<()> {
-    let dot = to_dot(packs, ctx_for);
+pub fn write_svg(
+    packs: &[Box<dyn Buildpack>],
+    ctx_for: impl Fn(&str) -> BuildCtx,
+    bundles: &[Bundle],
+    path: &Path,
+) -> Result<()> {
+    let dot = to_dot(packs, ctx_for, bundles);
     let output = Command::new("dot")
         .args(["-Tsvg"])
         .arg("-o")
