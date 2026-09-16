@@ -31,6 +31,7 @@ use buildpacks::bash::Bash;
 use buildpacks::cairo::Cairo;
 use buildpacks::cosmic_bg::CosmicBg;
 use buildpacks::cosmic_comp::CosmicComp;
+use buildpacks::cosmic_term::CosmicTerm;
 use buildpacks::dbus::Dbus;
 use buildpacks::dejavu_fonts::DejavuFonts;
 use buildpacks::distro_init::DistroInit;
@@ -155,7 +156,10 @@ pub fn kernel_ctx(cfg: &DistroConfig) -> BuildCtx {
 /// compositor nothing draws through; paired with `cosmic_bg` it's an
 /// actual (if minimal) usable desktop.
 fn bundles() -> Vec<buildpack_core::graph::Bundle> {
-    vec![buildpack_core::graph::Bundle { name: "cosmic-kiosk", members: &["cosmic_comp", "cosmic_bg"] }]
+    vec![buildpack_core::graph::Bundle {
+        name: "cosmic-kiosk",
+        members: &["cosmic_comp", "cosmic_bg", "cosmic_term"],
+    }]
 }
 
 pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
@@ -189,6 +193,7 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<VulkanLoader>(cfg, "vulkan_loader")?),
         Box::new(configured::<CosmicComp>(cfg, "cosmic_comp")?),
         Box::new(configured::<CosmicBg>(cfg, "cosmic_bg")?),
+        Box::new(configured::<CosmicTerm>(cfg, "cosmic_term")?),
         Box::new(configured::<DejavuFonts>(cfg, "dejavu_fonts")?),
         Box::new(configured::<Alacritty>(cfg, "alacritty")?),
         Box::new(DistroInit::new()),

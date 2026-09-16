@@ -1415,6 +1415,38 @@ Getting it running surfaced two more real gaps, in order:
   Not yet root-caused.
 ]
 
+==== cosmic-term: a different crash, not a fix
+
+With Alacritty's `winit` bug parked (§10.3.6.5's Gap 2), `cosmic-term`
+itself was tried as a way to test a specific hypothesis: it depends on a
+pop-OS fork of `winit` (`github.com/pop-os/winit`, tag `cosmic-0.14`),
+not upstream `winit` — plausibly a way to sidestep Alacritty's bug
+entirely, if the bug is upstream-`winit`-specific. Verified via a real
+`cargo check --release` against this sysroot before writing the
+buildpack: every dependency already resolved, no new C libraries needed
+(same `libxkbcommon`/glibc footprint as `cosmic-comp`/`cosmic-bg`, per
+`ldd`). One build-time issue, unrelated to the runtime question: unlike
+`cosmic-comp`/`cosmic-bg`, `cosmic-term`'s own `Cargo.toml` has no
+`[workspace]` table, so cargo's upward search found this project's own
+workspace instead — fixed with a `SourcePatch` appending an empty
+`[workspace]` table, exactly the remedy cargo's own error suggests.
+
+#callout(kind: "trap", "The pop-OS winit fork doesn't sidestep it — it has its own bug")[
+  Launched against a live `cosmic-comp` session (`WAYLAND_DISPLAY=wayland-1`,
+  the same socket `weston-simple-egl` proved works), `cosmic-term` doesn't
+  exit quietly like Alacritty — it panics outright: `` async fn` resumed
+  after completion `` at `iced/winit/src/lib.rs:765` (inside `libcosmic`'s
+  own `iced` fork's event-loop glue), a classic symptom of a future being
+  polled again after it already returned `Poll::Ready`. Different failure
+  mode, different codebase (`iced`'s async executor, not `winit`'s event
+  loop directly), but the same net result: no working GUI Wayland client
+  yet in the from-scratch image beyond the raw-`wayland-client` demo.
+  Also logged (non-fatal, before the panic): repeated `xkbcommon` errors
+  about a missing Compose file for the `en_US.UTF-8`/`C` locales — this
+  sysroot has no locale data installed at all, a separate gap. Not
+  pursued further this session.
+]
+
 == The sysroot: how these packages find each other
 
 Static-base packages (§10.3.1) never need each other at

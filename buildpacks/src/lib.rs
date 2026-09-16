@@ -4,6 +4,7 @@ pub mod busybox;
 pub mod cairo;
 pub mod cosmic_bg;
 pub mod cosmic_comp;
+pub mod cosmic_term;
 pub mod dbus;
 pub mod dejavu_fonts;
 pub mod distro_init;

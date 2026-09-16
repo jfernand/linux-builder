@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(cfg.image.hostname, "distro");
         assert_eq!(cfg.image.size_mb, 2048);
         assert_eq!(cfg.image.arch, "x86_64");
-        assert_eq!(cfg.packages.len(), 31); // every [section] except build_dir/networking/image
+        assert_eq!(cfg.packages.len(), 32); // every [section] except build_dir/networking/image
         let mesa = cfg.packages.get("mesa").expect("mesa section");
         assert_eq!(mesa.get("version").and_then(|v| v.as_str()), Some("26.2.2"));
 
