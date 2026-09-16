@@ -1,3 +1,4 @@
+pub mod alacritty;
 pub mod bash;
 pub mod busybox;
 pub mod cairo;
