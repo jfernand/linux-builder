@@ -95,7 +95,15 @@ fn spawn_env(path: &str, args: &[&str], envs: &[(&str, &str)]) -> Pid {
 }
 
 fn spawn_tty1() -> Pid {
-    spawn(AGETTY, &[AGETTY, "38400", "tty1"])
+    // --autologin root: cosmic-comp/cosmic-bg take DRM/KMS ownership away
+    // from tty1's own text console within a few seconds of boot (§10.3.6.1),
+    // which in practice means there's no reliable window of time to see a
+    // login prompt here at all, let alone type into it, before it's gone —
+    // the root cause of the tty1 auto-start in `/root/.bash_profile` never
+    // actually firing in practice. Autologin removes the human-typing step
+    // that race depended on; root's password is already empty (see
+    // `write_login_config`), so this doesn't weaken anything real.
+    spawn(AGETTY, &[AGETTY, "--autologin", "root", "38400", "tty1"])
 }
 
 fn spawn_serial() -> Pid {

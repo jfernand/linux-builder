@@ -172,6 +172,21 @@ fn write_login_config(root: &Path) -> Result<()> {
 /// argv0). `[ path -ef path ]` (same underlying file, i.e. same tty) and
 /// a plain counted `while` loop are pure bash builtins, so this doesn't
 /// silently break the next time that applet list changes.
+///
+/// Deliberately does NOT `exec cosmic-term`: unlike Alacritty,
+/// `cosmic-term` daemonizes itself (§10.3.6.6 — it has a real `fork`
+/// dependency), so its own top-level process always exits almost
+/// immediately once it's forked off the real, detached worker. `exec`ing
+/// into it — first tried here — meant *that exit* took the whole
+/// `agetty`→`login`→`bash` chain down with it (no fork ever created a
+/// new process to exit independently), which `distro-init` then
+/// respawned, autologin and all, launching yet another `cosmic-term`
+/// forever — five-plus stacked instances confirmed in under 8 seconds
+/// of boot. Running it plain (no `exec`) lets its own daemonizing exit
+/// return control to *this* script instead of unwinding the login chain;
+/// `break` out of the wait loop and fall through to an ordinary (idle,
+/// invisible once cosmic-comp owns DRM, but alive) interactive shell,
+/// which is all that's needed to stop the respawn loop.
 fn write_bash_profile(root: &Path) -> Result<()> {
     fs::write(
         root.join("root/.bash_profile"),
@@ -182,7 +197,10 @@ export WAYLAND_DISPLAY=wayland-1
 if [ /proc/self/fd/0 -ef /dev/tty1 ]; then
     i=0
     while [ $i -lt 50 ]; do
-        [ -S \"$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY\" ] && exec cosmic-term
+        if [ -S \"$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY\" ]; then
+            cosmic-term
+            break
+        fi
         sleep 0.2
         i=$((i + 1))
     done
