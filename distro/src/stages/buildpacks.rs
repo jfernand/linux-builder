@@ -38,11 +38,13 @@ use buildpacks::distro_init::DistroInit;
 use buildpacks::eudev::Eudev;
 use buildpacks::expat::Expat;
 use buildpacks::fcft::Fcft;
+use buildpacks::findutils::Findutils;
 use buildpacks::fontconfig::Fontconfig;
 use buildpacks::foot::Foot;
 use buildpacks::freetype::Freetype;
 use buildpacks::fribidi::Fribidi;
 use buildpacks::glib::Glib;
+use buildpacks::grep::Grep;
 use buildpacks::harfbuzz::Harfbuzz;
 use buildpacks::json_c::JsonC;
 use buildpacks::kernel::Kernel;
@@ -56,7 +58,9 @@ use buildpacks::mesa::Mesa;
 use buildpacks::pango::Pango;
 use buildpacks::pcre2::Pcre2;
 use buildpacks::pixman::Pixman;
+use buildpacks::procps::Procps;
 use buildpacks::seatd::Seatd;
+use buildpacks::sed::Sed;
 use buildpacks::shadow::Shadow;
 use buildpacks::sway::Sway;
 use buildpacks::tllist::Tllist;
@@ -221,6 +225,10 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<Tllist>(cfg, "tllist")?),
         Box::new(configured::<Fcft>(cfg, "fcft")?),
         Box::new(configured::<Foot>(cfg, "foot")?),
+        Box::new(configured::<Grep>(cfg, "grep")?),
+        Box::new(configured::<Sed>(cfg, "sed")?),
+        Box::new(configured::<Findutils>(cfg, "findutils")?),
+        Box::new(configured::<Procps>(cfg, "procps")?),
         Box::new(DistroInit::new()),
     ];
 

@@ -19,10 +19,17 @@ const MUSL_TARGET: &str = "x86_64-unknown-linux-musl";
 /// coreutils' scope upstream in uutils, despite the names being tempting
 /// to include here. Identical between both variants — uutils supports
 /// the same applets regardless of target libc.
+///
+/// `grep`/`sed`/`find`/`ps` deliberately excluded — none of them were
+/// ever coreutils applets in the first place (GNU or `uutils`; they're
+/// separate GNU grep/GNU sed/findutils/procps-ng projects entirely).
+/// This list used to include all four anyway, installing dead symlinks
+/// that dispatched to nothing (`coreutils: unknown program 'grep'`) —
+/// now real buildpacks (`buildpacks/src/{grep,sed,findutils,procps}.rs`).
 const COREUTILS_APPLETS: &[&str] = &[
     "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "echo", "pwd", "touch", "chmod", "chown",
-    "ln", "grep", "sed", "head", "tail", "sort", "uniq", "wc", "find", "env", "true", "false",
-    "test", "[", "df", "du", "date", "uname", "sleep", "kill", "ps",
+    "ln", "head", "tail", "sort", "uniq", "wc", "env", "true", "false", "test", "[", "df", "du",
+    "date", "uname", "sleep", "kill",
 ];
 
 /// `distro` (glibc) and `distroless` (musl) both use uutils, with

@@ -185,6 +185,26 @@ url = "https://codeberg.org/dnkl/fcft/archive/3.3.3.tar.gz"
 version = "1.28.0"
 url = "https://codeberg.org/dnkl/foot/archive/1.28.0.tar.gz"
 
+# grep/sed/find/ps were never part of coreutils (GNU or uutils) despite
+# distro.toml's [uutils] section not saying so anywhere obvious — see
+# buildpacks/src/grep.rs's doc comment.
+
+[grep]
+version = "3.11"
+url = "https://ftp.gnu.org/gnu/grep/grep-3.11.tar.xz"
+
+[sed]
+version = "4.9"
+url = "https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz"
+
+[findutils]
+version = "4.10.0"
+url = "https://ftp.gnu.org/gnu/findutils/findutils-4.10.0.tar.xz"
+
+[procps]
+version = "4.0.7"
+url = "https://gitlab.com/procps-ng/procps/-/archive/v4.0.7/procps-v4.0.7.tar.gz"
+
 [image]
 arch = "x86_64"
 size_mb = 2048
