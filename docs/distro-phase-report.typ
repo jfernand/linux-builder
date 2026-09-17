@@ -1465,8 +1465,8 @@ workspace instead — fixed with a `SourcePatch` appending an empty
 #callout(kind: "trap", "(resolved) The panic was the missing /dev/pts too")[
   Launched against a live `cosmic-comp` session (`WAYLAND_DISPLAY=wayland-1`,
   the same socket `weston-simple-egl` proved works), `cosmic-term` didn't
-  exit quietly like Alacritty — it panicked outright: `` async fn` resumed
-  after completion `` at `iced/winit/src/lib.rs:765` (inside `libcosmic`'s
+  exit quietly like Alacritty — it panicked outright:
+  #raw("async fn` resumed after completion") at `iced/winit/src/lib.rs:765` (inside `libcosmic`'s
   own `iced` fork's event-loop glue), the classic symptom of a future
   being polled again after it already returned `Poll::Ready`. Also logged
   (non-fatal, before the panic): repeated `xkbcommon` errors about a
