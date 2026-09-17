@@ -136,7 +136,11 @@ fn spawn_cosmic_comp() -> Pid {
     // spawn_seatd() above never passed one either). HOME=/root matches
     // this image's one real /etc/passwd entry, for whatever XDG config
     // lookups cosmic-config's dependencies do internally.
-    spawn_env(COSMIC_COMP, &[COSMIC_COMP], &[("XDG_RUNTIME_DIR", XDG_RUNTIME_DIR), ("HOME", "/root")])
+    spawn_env(
+        COSMIC_COMP,
+        &[COSMIC_COMP],
+        &[("XDG_RUNTIME_DIR", XDG_RUNTIME_DIR), ("HOME", "/root"), ("LANG", "en_US.UTF-8")],
+    )
 }
 
 fn spawn_cosmic_bg() -> Pid {
@@ -156,7 +160,12 @@ fn spawn_cosmic_bg() -> Pid {
     spawn_env(
         COSMIC_BG,
         &[COSMIC_BG],
-        &[("XDG_RUNTIME_DIR", XDG_RUNTIME_DIR), ("HOME", "/root"), ("WAYLAND_DISPLAY", "wayland-1")],
+        &[
+            ("XDG_RUNTIME_DIR", XDG_RUNTIME_DIR),
+            ("HOME", "/root"),
+            ("WAYLAND_DISPLAY", "wayland-1"),
+            ("LANG", "en_US.UTF-8"),
+        ],
     )
 }
 

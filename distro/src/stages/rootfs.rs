@@ -71,6 +71,7 @@ pub fn assemble_rootfs(cfg: &DistroConfig, force: bool) -> Result<()> {
     install_static_outputs(cfg, &root)?;
     install_sysroot(cfg, &root)?;
     install_dynamic_linker_and_host_libs(&root)?;
+    install_locale_data(&root)?;
     write_login_config(&root)?;
     write_bash_profile(&root)?;
 
@@ -120,6 +121,76 @@ fn copy_binary(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Pure data, copied wholesale from the host, same category as
+/// `HOST_DYNAMIC_LIBS` above (we don't build glibc from source either —
+/// this is its locale database, not a runtime language concern). Without
+/// this, `setlocale(LC_CTYPE, "en_US.UTF-8")` always silently fails and
+/// falls back to the bare `"C"` locale (no generated locale data exists
+/// anywhere in this rootfs at all), which is why every terminal client
+/// tried in this project (Alacritty, `foot`, `cosmic-term`) logs
+/// `xkbcommon: ERROR: [XKB-679] No Compose file for locale "en_US.UTF-8"`
+/// followed immediately by the same failure for `"C"` too — X11's own
+/// Compose data (a separate thing from XKB's keyboard-layout data
+/// already covered by the `xkeyboard_config` buildpack) was never
+/// installed at all either. `compose.dir`/`locale.dir` are the small
+/// text indices `libxkbcommon`'s compose-file lookup reads to map a
+/// locale name to the actual `Compose` file to load.
+fn install_locale_data(root: &Path) -> Result<()> {
+    let locale_archive = Path::new("/usr/lib/locale/locale-archive");
+    if locale_archive.exists() {
+        let dest_dir = root.join("usr/lib/locale");
+        fs::create_dir_all(&dest_dir).context("creating rootfs dir usr/lib/locale")?;
+        copy_binary(locale_archive, &dest_dir.join("locale-archive"))?;
+    }
+
+    let x11_locale_src = Path::new("/usr/share/X11/locale");
+    if x11_locale_src.exists() {
+        let dest_dir = root.join("usr/share/X11/locale");
+        fs::create_dir_all(&dest_dir).context("creating rootfs dir usr/share/X11/locale")?;
+        for name in ["compose.dir", "locale.dir"] {
+            let src = x11_locale_src.join(name);
+            if src.exists() {
+                copy_binary(&src, &dest_dir.join(name))?;
+            }
+        }
+        let en_us = x11_locale_src.join("en_US.UTF-8");
+        if en_us.exists() {
+            run_in(
+                Path::new("."),
+                Command::new("cp").arg("-a").arg(&en_us).arg(&dest_dir),
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Every group name eudev's own bundled rules (`GROUP="..."` in
+/// `/usr/lib/udev/rules.d/*.rules`) reference for device-node ownership
+/// — `root:x:0:` alone left every single one of these "unknown" at
+/// every boot (`udevd[N]: specified group 'tty' unknown`, ×9 different
+/// groups, harmless in that root's UID 0 always has access regardless
+/// of a device node's group, but real noise on every single boot log
+/// this whole project's history). GIDs are this project's own
+/// arbitrary sequential assignment, not required to match any other
+/// distro's convention — nothing here checks a specific numeric value,
+/// only that the name resolves via `getgrnam`.
+const GROUP_FILE: &str = "\
+root:x:0:
+tty:x:5:
+disk:x:6:
+lp:x:7:
+kmem:x:9:
+dialout:x:20:
+cdrom:x:24:
+tape:x:26:
+audio:x:29:
+video:x:44:
+kvm:x:60:
+input:x:100:
+sgx:x:101:
+";
+
 /// A single passwordless `root` account (empty field in `/etc/shadow` —
 /// `login` still prompts for a password, but accepts any input including
 /// none; run `passwd` once logged in to set a real one), plus the handful
@@ -127,7 +198,7 @@ fn copy_binary(src: &Path, dest: &Path) -> Result<()> {
 /// doesn't warn about a missing login-record/database.
 fn write_login_config(root: &Path) -> Result<()> {
     fs::write(root.join("etc/passwd"), "root:x:0:0:root:/root:/bin/bash\n")?;
-    fs::write(root.join("etc/group"), "root:x:0:\n")?;
+    fs::write(root.join("etc/group"), GROUP_FILE)?;
 
     let shadow_path = root.join("etc/shadow");
     fs::write(&shadow_path, "root::19999:0:99999:7:::\n")?;
@@ -193,6 +264,7 @@ fn write_bash_profile(root: &Path) -> Result<()> {
         "\
 export XDG_RUNTIME_DIR=/run/user/0
 export WAYLAND_DISPLAY=wayland-1
+export LANG=en_US.UTF-8
 
 if [ /proc/self/fd/0 -ef /dev/tty1 ]; then
     i=0
