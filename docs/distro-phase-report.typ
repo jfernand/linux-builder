@@ -1742,6 +1742,107 @@ Assembling the rootfs copies this whole sysroot tree in with one
 `cp -a` — every package that built into it, regardless of which
 mechanism (`DESTDIR` or a real sysroot prefix) actually put it there.
 
+== Rust on target: a working toolchain, not just `rustc --version`
+
+Every other use of Rust in this whole project up to this point is the
+*host's* own toolchain compiling buildpacks like `distro-init`. This is
+different: `rustc`/`cargo` genuinely running *on the built image*,
+`§11`'s "next phase" for a while. Building `rustc` from source is a
+multi-hour, multi-stage bootstrap — not practical here, so
+`rust_toolchain` follows the same precedent as glibc's shared libraries
+and locale/Compose data (`rootfs.rs`'s `HOST_DYNAMIC_LIBS`/
+`install_locale_data`): download the official prebuilt
+binary distribution from `static.rust-lang.org` and place its files via
+`rust-installer`'s own `install.sh`, `rust-docs`/`rust-docs-json-preview`
+excluded (dead weight on this image). `distro` only — official Rust has
+no native musl-hosted `rustc` at all (only `cargo` ships an
+`x86_64-unknown-linux-musl` host build; `rust-std` for musl exists
+solely as a cross-compilation target), a hard blocker for `distroless`,
+not a scope choice.
+
+#callout(kind: "trap", "rustc --version worked immediately; actually compiling didn't")[
+  `rustc`/`cargo` both ran and reported their versions the moment the
+  tarball's files landed in the rootfs. Compiling anything failed
+  outright: `error: linker `cc` not found`. `rustc` still shells out to
+  an external `cc` as a linker *driver* by default on
+  `x86_64-unknown-linux-gnu` — confirmed against rustc's own
+  documentation, not assumed — even when the actual linking backend is
+  the bundled `rust-lld` (`llvm-tools-preview`, already installed).
+  Full self-contained linking (no external `cc` at all) is an explicit,
+  unstable, no-timeline work in progress, not something to build on. No
+  C toolchain had ever existed *on* this image before — only used on the
+  host to build every buildpack that needed compiling.
+]
+
+`native_gcc` closes that gap: a link-only GCC + binutils, copied
+straight from the host (this project's own gcc-13/binutils, the same
+"we don't build glibc from source either" reasoning as
+`HOST_DYNAMIC_LIBS`/`install_locale_data`). Link-only means the
+*compiler frontend* (`cc1`/`cc1plus`, ~30MB each) is deliberately left
+out — `rustc` already does its own codegen and only needs `cc` to
+assemble the final binary from object files it already produced: the
+`gcc` driver itself, `collect2`, the real linker, gcc's own small
+`crtbegin`/`crtend`/`libgcc*.a` objects, and glibc's CRT startup objects
+(`crt1.o`/`crti.o`/`crtn.o`/`Scrt1.o` — from glibc, not gcc).
+
+Getting from "files copied" to "a real `cargo build` actually links"
+took three more rounds of real boot-test failures, each a genuine,
+previously-invisible gap:
+
+#callout(kind: "trap", "Round 1: ld itself needed libraries nothing else here had pulled in")[
+  `ld.bfd` (real binutils, shipped alongside `rust-lld` even though
+  `rustc` defaults to the latter) turned out to need `libbfd`, `libctf`,
+  `libjansson`, and `libsframe` — none of them previously anywhere in
+  this rootfs. Added to `HOST_DYNAMIC_LIBS`.
+]
+
+#callout(kind: "trap", "Round 2: GCC's own linker-plugin default, not rustc's fault")[
+  `cc: fatal error: '-fuse-linker-plugin', but liblto_plugin.so not
+  found` — this Ubuntu-packaged gcc-13's own specs (`gcc -dumpspecs`)
+  unconditionally engage its linker-plugin path
+  (`-plugin %(linker_plugin_file) -plugin-opt=%(lto_wrapper) ...`)
+  unless `-fno-use-linker-plugin` or `-fno-lto` is passed — nothing to
+  do with LTO actually being requested. `rustc`'s own default
+  `-fuse-ld=lld` makes `collect2` think the linker supports the plugin
+  protocol and engages it regardless. Shipping the (small, ~70KB)
+  `liblto_plugin.so` got past the "not found" error, but then
+  `%(lto_wrapper)` — the `lto-wrapper` program path, deliberately not
+  shipped (compiler-frontend-adjacent, not needed for pure linking) —
+  expanded empty: `rust-lld: error: -plugin-opt=: unknown plugin option
+  ''`. Not something `rustc`'s own invocation can be changed to avoid —
+  it has no idea this host's specific GCC packaging defaults this way.
+  Fixed by making `cc` a thin wrapper script (`exec /usr/bin/gcc
+  -fno-use-linker-plugin "$@"`) instead of a plain symlink to `gcc`.
+
+  Writing that wrapper script surfaced a real bug of its own:
+  `fs::write` follows symlinks, and the very first version of this fix
+  wrote straight through the pre-existing `cc` -> `gcc` ->
+  `x86_64-linux-gnu-gcc-13` symlink chain, silently overwriting the real
+  compiler binary with the wrapper script's own text. Fixed by removing
+  the existing path first, same defensive pattern the buildpack's own
+  `symlink()` helper already used.
+]
+
+#callout(kind: "trap", "Round 3: libm.so's own linker script, and where /lib really is")[
+  `rust-lld: error: cannot open /lib/x86_64-linux-gnu/libmvec.so.1: No
+  such file or directory`. `libm.so` (the *development* linker script
+  glibc's `-lm` resolves against, distinct from the versioned runtime
+  `libm.so.6` `HOST_DYNAMIC_LIBS` already copies) references
+  `libmvec.so.1` by the exact absolute path `/lib/x86_64-linux-gnu/...`
+  — but `native_gcc`'s own sysroot-bulk-copied files land under
+  `/usr/lib/x86_64-linux-gnu` instead, and this rootfs never merges
+  `/lib` and `/usr/lib`. `libmvec` is a genuine runtime `.so.1` (not a
+  dev-only stub), so the right fix was moving it into
+  `HOST_DYNAMIC_LIBS` instead — the same place every other host runtime
+  library it needs to sit alongside already lives.
+]
+
+Verified for real, not just "files exist": `rustc -o hello main.rs`
+compiled and linked a real binary that ran and printed its own output;
+`cargo init` + `cargo build` + running the resulting
+`target/debug/hello_cargo` did the same through the full `cargo`
+pipeline.
+
 == Pipeline
 
 #codepanel(title: "distro's CLI surface")[
@@ -1781,7 +1882,8 @@ packages need, plus the dynamic linker itself and `/etc/passwd` +
 = What Isn't Part of the Picture Yet
 
 #spec(
-  ("Next", [`rustup`/`cargo` on-target, plus a curated Rust-CLI-tools suite (ripgrep, bat, eza, …) — no new architecture needed, each is just another buildpack.]),
+  ("Done", [A working on-target Rust toolchain (§10.5) — `rustc`+`cargo`, verified compiling and running real binaries, not just `--version`.]),
+  ("Next", [A curated Rust-CLI-tools suite (ripgrep, bat, eza, …) — trivial now that `cargo` exists on-target, each just its own tiny buildpack or a vendored `cargo install`.]),
   ("Then", [COSMIC itself, minimal subset first — see the real component breakdown below.]),
   ("Later", [The remaining COSMIC components, real GPU drivers beyond `virtio-gpu`, audio, networking UI.]),
 )

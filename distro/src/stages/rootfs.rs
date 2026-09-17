@@ -23,7 +23,20 @@ use std::process::Command;
 /// color-support detection) — a dependency that only became reachable
 /// once `-Dllvm=enabled` (added for Vulkan) actually got exercised at
 /// runtime, the same "latent until something actually loads it" pattern
-/// `libffi` hit above. Extend this list as later phases pull in more.
+/// `libffi` hit above. `libdl`/`librt`/`libpthread` are the newest
+/// addition: the `rust_toolchain` buildpack's `rustc`/`cargo` are the
+/// first things here to link them — small (~14KB) compat-stub shims on
+/// modern glibc (2.34+ folded their real symbols into `libc.so.6`
+/// itself), but still real `DT_NEEDED` entries the dynamic linker won't
+/// silently skip. `libmvec` is `native_gcc`'s own addition: its copied
+/// `libm.so` development linker-script references
+/// `/lib/x86_64-linux-gnu/libmvec.so.1` by that exact absolute path (an
+/// `AS_NEEDED` entry — GNU ld/lld still needs the file to exist even
+/// though it's optional), and this is the one place in this rootfs that
+/// path actually resolves (`native_gcc`'s own sysroot-bulk-copied files
+/// land under `/usr/lib/x86_64-linux-gnu` instead — this rootfs never
+/// merges `/lib` and `/usr/lib`). Extend this list as later phases pull
+/// in more.
 const HOST_DYNAMIC_LIBS: &[&str] = &[
     "libc.so.6",
     "libexpat.so.1",
@@ -34,6 +47,10 @@ const HOST_DYNAMIC_LIBS: &[&str] = &[
     "libzstd.so.1",
     "libffi.so.8",
     "libtinfo.so.6",
+    "libdl.so.2",
+    "librt.so.1",
+    "libpthread.so.0",
+    "libmvec.so.1",
 ];
 const HOST_LIB_DIR: &str = "/lib/x86_64-linux-gnu";
 const HOST_DYNAMIC_LINKER: &str = "/lib64/ld-linux-x86-64.so.2";

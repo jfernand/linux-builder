@@ -205,7 +205,16 @@ url = "https://ftp.gnu.org/gnu/findutils/findutils-4.10.0.tar.xz"
 version = "4.0.7"
 url = "https://gitlab.com/procps-ng/procps/-/archive/v4.0.7/procps-v4.0.7.tar.gz"
 
+# Official prebuilt binary distribution, not built from source (rustc's
+# own bootstrap is a multi-hour, multi-stage process) — same category as
+# glibc's shared libs and the locale/Compose data in rootfs.rs's
+# install_locale_data, just versioned/fetched through the normal
+# buildpack pipeline instead of copied straight from the host.
+[rust_toolchain]
+version = "1.98.1"
+url = "https://static.rust-lang.org/dist/2026-09-03/rust-1.98.1-x86_64-unknown-linux-gnu.tar.gz"
+
 [image]
 arch = "x86_64"
-size_mb = 2048
+size_mb = 4096
 hostname = "distro"

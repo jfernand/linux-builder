@@ -55,10 +55,12 @@ use buildpacks::libinput::Libinput;
 use buildpacks::libpng::Libpng;
 use buildpacks::libxkbcommon::Libxkbcommon;
 use buildpacks::mesa::Mesa;
+use buildpacks::native_gcc::NativeGcc;
 use buildpacks::pango::Pango;
 use buildpacks::pcre2::Pcre2;
 use buildpacks::pixman::Pixman;
 use buildpacks::procps::Procps;
+use buildpacks::rust_toolchain::RustToolchain;
 use buildpacks::seatd::Seatd;
 use buildpacks::sed::Sed;
 use buildpacks::shadow::Shadow;
@@ -229,6 +231,8 @@ pub fn all_packages(cfg: &DistroConfig) -> Result<Vec<Box<dyn Buildpack>>> {
         Box::new(configured::<Sed>(cfg, "sed")?),
         Box::new(configured::<Findutils>(cfg, "findutils")?),
         Box::new(configured::<Procps>(cfg, "procps")?),
+        Box::new(configured::<NativeGcc>(cfg, "native_gcc")?),
+        Box::new(configured::<RustToolchain>(cfg, "rust_toolchain")?),
         Box::new(DistroInit::new()),
     ];
 
