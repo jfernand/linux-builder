@@ -18,3 +18,12 @@ Shared architecture lives in `buildpack-core`/`buildpacks` (the
   `ninja`/`pkg-config`. Only a package's *runtime* language matters, not
   its build system. Check this before picking an implementation for any
   new buildpack (network stack, audio stack, COSMIC components, etc.).
+- **Don't let a noticed bug slide without asking first.** If something
+  looks wrong while working on something else — a stray file, a bad
+  install path, a warning that shouldn't be there — flag it and ask
+  before moving on, rather than deciding on your own it's out of scope.
+  If the user says to leave it for now, still record it (a `docs/`
+  callout, a memory note, or similar) so it doesn't just get forgotten.
+  Case in point: `foot`'s doubled `sysroot/data/RustroverProjects/...`
+  install path was noticed, dismissed as harmless without asking, and
+  sat there for several commits before the user caught it themselves.
