@@ -276,20 +276,25 @@ fn test_qemu(ctx: &BuildCtx, window: bool) -> Result<()> {
         "-vga",
         "none",
         "-device",
-        "virtio-gpu-gl-pci",
+        // xres/yres default to a cramped 1280x800; 1920x1080 is a
+        // reasonable common default given a modern host display. The
+        // window can still be resized live afterward (virtio-gpu
+        // renegotiates the mode with the guest), this is just what it
+        // starts at.
+        "virtio-gpu-gl-pci,xres=1920,yres=1080",
     ]);
 
     if window {
         // A real window with its own GL context (not just a framebuffer
-        // blit), own keyboard focus. -serial mon:stdio still matters
-        // here: cosmic-comp takes over DRM/KMS ownership from the
-        // kernel's own text console a few seconds into boot, permanently
-        // replacing whatever tty1's agetty had shown in the window with
-        // cosmic-comp's compositor output instead — there is no login
-        // prompt reachable through the window at all once that happens.
-        // The serial console (ttyS0, a separate agetty, unaffected by
-        // DRM ownership) is the only way to actually reach a shell while
-        // the window is up, so it goes to our own stdio here too.
+        // blit), own keyboard focus. cosmic-comp takes DRM/KMS ownership
+        // away from tty1's own text console within a few seconds of
+        // boot — too fast a race to reliably see or type into a login
+        // prompt there by hand, which is why tty1 autologs in as root
+        // (see distro-init's spawn_tty1) straight into cosmic-term via
+        // root's own `.bash_profile`. -serial mon:stdio still matters:
+        // ttyS0 (a separate agetty, unaffected by DRM ownership) stays a
+        // normal interactive login, still the way to reach a plain debug
+        // shell without going through the window/cosmic-term at all.
         cmd.args(["-display", "gtk,gl=on", "-serial", "mon:stdio"]);
     } else {
         // Headless, but still GPU-accelerated: egl-headless renders via
@@ -330,9 +335,9 @@ fn test_qemu(ctx: &BuildCtx, window: bool) -> Result<()> {
     if window {
         println!(
             "booting {} in QEMU — close the window, or Ctrl-A X here, to quit. \
-             Log in as root in the window itself once you see the tty1 prompt there — \
-             it auto-starts cosmic-term once cosmic-comp is up. This terminal's serial \
-             console (ttyS0) still works too, as a plain debug shell that doesn't race \
+             The window auto-logs in as root on tty1 and starts cosmic-term once \
+             cosmic-comp is up, no typing needed. This terminal's serial console \
+             (ttyS0) still works too, as a plain debug shell that doesn't race \
              cosmic-comp's startup.",
             image.display()
         );
