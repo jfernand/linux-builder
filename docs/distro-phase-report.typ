@@ -505,6 +505,31 @@ other authentication sources (fingerprint readers, LDAP, two-factor)
 without changing `login` itself — not used in this workspace; `login`
 here does the passwd/shadow check directly.
 
+== Not every familiar command is coreutils
+
+`grep`, `sed`, `find`, and `ps` feel like they belong on the same list as
+`ls`/`cat`/`cp` above — they're just as ubiquitous, just as taken for
+granted. They aren't coreutils, though, in GNU's original tool or in
+`uutils`' reimplementation of it: GNU grep, GNU sed, GNU findutils, and
+procps-ng are four separate, independently-versioned upstream projects,
+each with its own release cadence and its own real (if today mostly
+overlapping) transitive dependencies — GNU sed, for instance, links
+against `libselinux` and `libpcre2` by default via a gnulib module that
+probes for SELinux context-preservation support unconditionally, neither
+of which has anything to do with basic stream editing.
+
+This distinction is easy to get wrong precisely because it doesn't show
+up anywhere obvious: a multi-call binary's symlink (§5.1) can point at
+any name at all, including one that isn't a real applet of that binary,
+and the failure — `unknown program 'grep'` — only appears the moment
+something actually tries to run it, never at build time. This workspace
+got exactly that wrong for a while: `uutils`' own applet-symlink list
+included `grep`/`sed`/`find`/`ps` as if they were coreutils, installing
+dangling symlinks under `/bin` that dispatched to nothing. Fixed by
+removing them from that list and building the real, separate projects
+instead — GNU grep 3.11, GNU sed 4.9, GNU findutils 4.10.0, and
+procps-ng v4.0.7 — each its own small, self-contained autotools build.
+
 = Graphics, Conceptually: From a Kernel Driver to a Frame on Screen
 
 == What a compositor actually does
@@ -1541,6 +1566,67 @@ With both fixes in place, `sway`+`foot` and Alacritty both work: the
 first fully working GUI terminals in this from-scratch image, two
 independent proofs of the same underlying `/dev/pts` fix.
 
+==== Reaching a session without racing the compositor for the window
+
+Every one of the tests above still needed logging in through the
+serial console (ttyS0) and manually exporting `XDG_RUNTIME_DIR`/
+`WAYLAND_DISPLAY` before launching anything — a real usability gap for
+the actual window `test-qemu --window` opens, not just a scripting
+convenience. Closing it took three attempts, each surfacing a different
+real bug.
+
+#callout(kind: "trap", "Attempt 1: the login prompt races cosmic-comp for the display")[
+  A `/root/.bash_profile` (sourced by `login`'s own exec of a login
+  shell, §5.2) is the natural place to set both session variables
+  automatically and, specifically on `tty1` — the one console QEMU's
+  window actually renders — wait for `cosmic-comp`'s Wayland socket and
+  launch `cosmic-term`. Detecting "am I on tty1" needed care: `$(tty)`
+  looked obvious but doesn't work here (§5.4's own lesson, a different
+  angle on it — `tty` is a real `uutils` applet with no symlink in
+  `COREUTILS_APPLETS` at all), so the actual check uses bash's builtin
+  `-ef` file-identity test (`[ /proc/self/fd/0 -ef /dev/tty1 ]`) instead,
+  paired with a plain counted `while` loop rather than external `seq`.
+
+  None of that mattered on the first real test: `cosmic-comp` takes
+  DRM/KMS ownership away from tty1's own text console within a few
+  seconds of boot (§10.3.6.1), which in practice is too fast a window to
+  reliably see a login prompt there at all, let alone type a username
+  into it. The profile script was correct and never got the chance to
+  run.
+]
+
+#callout(kind: "trap", "Attempt 2: autologin fixes the race, then causes a respawn storm")[
+  The fix for the race removes the human-typing step it depended on
+  entirely: `agetty --autologin root` on tty1 (only — `ttyS0` stays a
+  normal interactive login, still the plain debug-shell path). Root's
+  password is already empty (§5.3), so this doesn't weaken anything
+  real.
+
+  That surfaced a second, unrelated bug immediately: `cosmic-term`
+  daemonizes itself (a real `fork` dependency, unlike Alacritty), so its
+  own top-level process always exits almost immediately once it forks
+  off the real, detached worker. The profile's `exec cosmic-term` meant
+  that exit took the whole `agetty`→`login`→`bash` chain down with it —
+  no fork in that chain ever created a process to exit independently of
+  the others — which `distro-init` dutifully respawned, autologin and
+  all, launching another `cosmic-term`, forever. Five-plus stacked
+  `cosmic-term` processes confirmed within 8 seconds of boot.
+
+  Fixed by dropping the `exec`: running `cosmic-term` plain (no `exec`,
+  no `&`) lets its own daemonizing exit return control to *this* script
+  instead of unwinding the login chain, so it can `break` out of the
+  wait loop and fall through to an ordinary, harmless idle shell.
+  Verified booting headless with autologin enabled: exactly one
+  `cosmic-term` process, stable over 30+ seconds, no respawn loop.
+]
+
+Separately, the window itself defaulted to a cramped 1280×800 —
+`virtio-gpu-gl-pci`'s own default `xres`/`yres`, not something
+`cosmic-comp` or `sway` chooses. Set explicitly to 1920×1080 in
+`test_qemu`'s own device args; still just a starting mode, the window
+can be resized live afterward and virtio-gpu renegotiates with the
+guest same as before.
+
 == The sysroot: how these packages find each other
 
 Static-base packages (§10.3.1) never need each other at
@@ -1728,14 +1814,22 @@ Cargo, not separate buildpacks of their own.
   its build system.
 ]
 
-And three deliberate gaps in what's already built, worth knowing about
+And two deliberate gaps in what's already built, worth knowing about
 rather than discovering later:
 
-- uutils' built feature set does not include `grep` or `sed` — they were
-  never part of coreutils' scope upstream in the first place. The applet
-  symlinks exist but dangle. Not yet fixed.
 - `libxcb` was never built. Its only real consumer on a Wayland-native
   target is XWayland compatibility, not currently planned.
 - `mtdev` (legacy multitouch) and `libwacom` (tablet identification) were
   both left out of `libinput` — niche hardware support, easy to add back
   later if a real device needs it.
+
+#callout(kind: "note", "Formerly a gap: grep/sed/find/ps")[
+  An earlier draft of this section listed `grep`/`sed` as a known gap —
+  `uutils`' `COREUTILS_APPLETS` list had symlinked all four of `grep`,
+  `sed`, `find`, and `ps` under `/bin`, but none were ever real
+  coreutils applets to begin with (GNU coreutils or `uutils` — they're
+  separate GNU grep/GNU sed/findutils/procps-ng projects), so every one
+  of those symlinks dangled. Now fixed: real buildpacks for all four
+  (`buildpacks/src/{grep,sed,findutils,procps}.rs`), verified working
+  live in a booted image — see §5.4.
+]
