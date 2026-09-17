@@ -90,6 +90,14 @@ impl Buildpack for Libxkbcommon {
                 "-Denable-docs=false",
                 "-Dxkb-config-root=/usr/share/X11/xkb",
                 "-Denable-xkbregistry=false",
+                // Same PKG_CONFIG_SYSROOT_DIR-mangling-then-DESTDIR-doubling
+                // bug class as foot's systemd-units-dir (see that buildpack's
+                // comment): `dependency('bash-completion')` leaks this host's
+                // real bash-completion.pc, and its already-sysroot-mangled
+                // completionsdir gets DESTDIR-prefixed a second time —
+                // xkbcli's completion script isn't needed in this image
+                // anyway (no interactive bash-completion setup at all here).
+                "-Denable-bash-completion=false",
             ],
         )
     }

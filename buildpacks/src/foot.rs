@@ -92,6 +92,22 @@ impl Buildpack for Foot {
                 "-Dgrapheme-clustering=disabled",
                 "-Ddocs=disabled",
                 "-Dtests=false",
+                // foot's own meson.build only skips installing systemd user
+                // units when BOTH this is empty AND `dependency('systemd')`
+                // isn't found — but that probe leaks the host's own real
+                // systemd.pc (this build host has one; the built image has
+                // no systemd at all), and PKG_CONFIG_SYSROOT_DIR then
+                // mangles its already-absolute completionsdir-style
+                // variable, which ninja's DESTDIR install step prefixes
+                // *again* on top of — installing to a doubled, garbage path
+                // like sysroot/data/RustroverProjects/.../sysroot/usr/lib/…
+                // instead of sysroot/usr/lib/…. Same bug class as weston's
+                // pango probe/wlroots' hwdata/libxkbcommon's bash-completion
+                // below. Overriding with an explicit, correct, DESTDIR-
+                // relative path sidesteps the host probe entirely — these
+                // unit files are unused in this dbus/seatd-only rootfs
+                // either way, but at least land somewhere sane now.
+                "-Dsystemd-units-dir=/usr/lib/systemd/user",
                 "-Dutmp-backend=none",
             ],
         )
